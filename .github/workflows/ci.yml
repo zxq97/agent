@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, docs/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-docs:
+    name: Lint Markdown Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check markdown files exist
+        run: |
+          echo "Checking required documentation files..."
+          for f in CLAUDE.md docs/architecture.md docs/data-flow.md; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: Missing required file: $f"
+              exit 1
+            fi
+            echo "  ✓ $f"
+          done
+          for f in docs/phases/phase-{1..6}-*.md; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: Missing phase doc: $f"
+              exit 1
+            fi
+            echo "  ✓ $f"
+          done
+          echo "All documentation files present."
+
+      - name: Check markdown formatting
+        run: |
+          echo "Checking for basic markdown issues..."
+          errors=0
+          for f in $(find . -name "*.md" -not -path "./.git/*"); do
+            # Check for trailing whitespace
+            if grep -rn ' $' "$f" > /dev/null 2>&1; then
+              echo "WARNING: Trailing whitespace in $f"
+            fi
+            # Check file is not empty
+            if [ ! -s "$f" ]; then
+              echo "ERROR: Empty file: $f"
+              errors=$((errors + 1))
+            fi
+          done
+          if [ $errors -gt 0 ]; then
+            exit 1
+          fi
+          echo "Markdown checks passed."
+
+  go-build:
+    name: Go Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Check if go.mod exists
+        id: gomod
+        run: test -f go.mod && echo "exists=true" >> $GITHUB_OUTPUT || echo "exists=false" >> $GITHUB_OUTPUT
+      - name: Build
+        if: steps.gomod.outputs.exists == 'true'
+        run: go build ./...
+      - name: Test
+        if: steps.gomod.outputs.exists == 'true'
+        run: go test ./...
+
+  pr-check:
+    name: PR Description Check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR has description
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ -z "$PR_BODY" ]; then
+            echo "ERROR: PR description is empty"
+            exit 1
+          fi
+          echo "PR has description. ✓"
