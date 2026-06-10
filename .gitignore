@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Compiled binary (no extension, e.g. `cli`)
+/cli
+
 # Test binary, built with `go test -c`
 *.test
 

@@ -1,0 +1,62 @@
+[
+  {
+    "category": "经济型",
+    "description": "适合日常通勤和短途出行，性价比高",
+    "typical_models": ["朗逸", "轩逸", "卡罗拉", "英朗", "宝来"],
+    "seat_count": 5,
+    "luggage": "2个行李箱",
+    "tags": ["省油", "性价比高", "城市代步"],
+    "daily_price_range": "80-150元/天",
+    "suitable_for": "日常通勤、短途出行、预算有限的用户"
+  },
+  {
+    "category": "舒适型",
+    "description": "空间宽敞，适合家庭出游和商务出行",
+    "typical_models": ["帕萨特", "凯美瑞", "雅阁", "天籁", "迈腾"],
+    "seat_count": 5,
+    "luggage": "3个行李箱",
+    "tags": ["舒适", "空间大", "静音好"],
+    "daily_price_range": "150-300元/天",
+    "suitable_for": "家庭出游、商务出行、长途自驾"
+  },
+  {
+    "category": "豪华型",
+    "description": "高端体验，适合商务接待和重要场合",
+    "typical_models": ["奥迪A4L", "宝马3系", "奔驰C级", "沃尔沃S60"],
+    "seat_count": 5,
+    "luggage": "3个行李箱",
+    "tags": ["豪华", "体面", "配置丰富"],
+    "daily_price_range": "300-600元/天",
+    "suitable_for": "商务接待、正式场合、品质出行"
+  },
+  {
+    "category": "SUV",
+    "description": "通过性好，适合自驾游和复杂路况",
+    "typical_models": ["本田CR-V", "丰田RAV4", "大众途观", "哈弗H6"],
+    "seat_count": 5,
+    "luggage": "4个行李箱",
+    "tags": ["通过性好", "空间大", "自驾游首选"],
+    "daily_price_range": "150-400元/天",
+    "suitable_for": "自驾游、山地出行、家庭出游、行李较多"
+  },
+  {
+    "category": "MPV",
+    "description": "多人出行首选，7座空间灵活",
+    "typical_models": ["别克GL8", "本田奥德赛", "丰田塞纳", "传祺M8"],
+    "seat_count": 7,
+    "luggage": "4个行李箱",
+    "tags": ["7座", "空间灵活", "多人出行"],
+    "daily_price_range": "200-500元/天",
+    "suitable_for": "多人出行、商务接待、带老人小孩的家庭出游"
+  },
+  {
+    "category": "电动车",
+    "description": "低碳环保，使用成本低，适合城市短途",
+    "typical_models": ["特斯拉Model 3", "比亚迪汉EV", "小鹏P7", "蔚来ES6"],
+    "seat_count": 5,
+    "luggage": "2个行李箱",
+    "tags": ["环保", "使用成本低", "安静"],
+    "daily_price_range": "100-350元/天",
+    "suitable_for": "城市短途出行、环保出行、充电便利的场景"
+  }
+]

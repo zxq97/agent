@@ -1,0 +1,17 @@
+llm:
+  provider: "deepseek"
+  api_key: "sk-c4cceb7a99934b9fa1d1f7bd051d5750"
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-v4-flash"
+  max_tokens: 4096
+  temperature: 0.7
+
+mcp:
+  base_url: "http://10.78.133.4:32241/car/rental/inner/mcp"
+  token: "00016257309"
+  phone: "00016257309"
+
+agent:
+  max_history_turns: 10
+  max_iterations: 20
+  request_timeout: 60s

@@ -76,6 +76,8 @@ agent/
 - 错误处理：`fmt.Errorf("xxx: %w", err)` 包装，保留错误链
 - 日志：结构化日志（Zap），包含 session_id / agent_name
 - 配置外置：环境相关配置通过环境变量或 config.yaml 注入
+- **import 别名**：禁止使用 import 别名，除非遇到同名包冲突。包命名时应避免与其他包重名，从源头消除别名需求
+- **编译产物清理**：`go build` 产生的二进制文件（如 `cli`）不得提交到仓库，编译验证后须删除；`.gitignore` 已忽略 `/cli`
 
 ### 5. 知识库管理
 
