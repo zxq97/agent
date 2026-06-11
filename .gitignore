@@ -33,3 +33,9 @@ go.work.sum
 
 # Claude Code
 .claude/
+
+# Local-only env override
+.env.local
+
+# CLI debug log output
+logs/

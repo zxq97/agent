@@ -1,0 +1,27 @@
+env: prod
+
+llm:
+  default: deepseek_chat
+  providers:
+    deepseek_chat:
+      name: deepseek
+      model: deepseek-chat
+      api_key: "${DEEPSEEK_API_KEY}"
+      base_url: "https://api.deepseek.com"
+      timeout: 60
+    deepseek_reasoner:
+      name: deepseek
+      model: deepseek-reasoner
+      api_key: "${DEEPSEEK_API_KEY}"
+      base_url: "https://api.deepseek.com"
+      timeout: 120
+  agent_bindings:
+    shopping: deepseek_chat
+    insurance: deepseek_chat
+    knowledge: deepseek_reasoner
+    supervisor: deepseek_chat
+
+tyche:
+  endpoint: "${TYCHE_MCP_ENDPOINT:-http://tyche.intra/car/rental/inner/mcp}"
+  phone: "${TYCHE_MCP_PHONE}"
+  timeout: 30

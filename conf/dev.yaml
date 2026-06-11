@@ -1,0 +1,30 @@
+env: dev
+
+llm:
+  default: deepseek_chat
+  providers:
+    deepseek_chat:
+      name: deepseek
+      model: deepseek-chat
+      api_key: "sk-c4cceb7a99934b9fa1d1f7bd051d5750"
+      base_url: "https://api.deepseek.com"
+      timeout: 60
+    deepseek_reasoner:
+      name: deepseek
+      model: deepseek-reasoner
+      api_key: "sk-c4cceb7a99934b9fa1d1f7bd051d5750"
+      base_url: "https://api.deepseek.com"
+      timeout: 120
+  agent_bindings:
+    shopping: deepseek_chat
+    insurance: deepseek_chat
+    knowledge: deepseek_reasoner
+    supervisor: deepseek_chat
+
+tyche:
+  # tyche /controller/mcp/controller.go 暴露的 MCP server 入口。
+  endpoint: "http://10.78.133.4:33558/car/rental/inner/mcp"
+  # Authorization: Bearer <phone>,需在 tyche Apollo mcp_allowed_phones 白名单。
+  # 留空时,tyche 端若白名单也为空可放行(便于本地调试)。
+  phone: "00016257309"
+  timeout: 30
