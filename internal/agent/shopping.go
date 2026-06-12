@@ -28,11 +28,13 @@ type ShoppingAgent struct {
 //   - chatModel:支持 tool calling 的 ChatModel(从 llm.Factory.Get 拿)
 //   - allTools:tools.All(d) 的返回
 //   - vars:渲染 system prompt 用的上下文(now / city hint / 客服昵称)
+//   - maxStep:React loop 最大步数,0 表示用 eino 默认(12)。推荐用 cfg.Agent.MaxStep(30)
 func NewShoppingAgent(
 	ctx context.Context,
 	chatModel llm.ChatModel,
 	allTools []tool.BaseTool,
 	vars prompt.ShoppingSystemVars,
+	maxStep int,
 ) (*ShoppingAgent, error) {
 	if chatModel == nil {
 		return nil, fmt.Errorf("nil chatModel")
@@ -50,11 +52,12 @@ func NewShoppingAgent(
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: allTools,
 		},
-		// DeepSeek(以及 Claude 等)在中文长 prompt 下,
-		// tool_call 不会出现在流式第一个 chunk —— 通常是先吐一段思考文本,
-		// 末尾才追加 tool_calls。eino 默认 firstChunkStreamToolCallChecker 只看第一帧,
-		// 会把这种情况误判为"无 tool 调用"直接结束 loop。
-		// 这里换成"扫完整个流再判定"的 checker。
+		// MaxStep:控制 React loop 最大步数(每次 chatModel→toolsNode 切换各算 1 步)。
+		// 典型场景: locations(2) + resolve_poi(2) + search_quotes(2) + get_order_details(2) + 回答(1) = 9步
+		// 设 30 保留充足余量,防止多轮追问或重试时触发 exceeds max steps 报错。
+		MaxStep: maxStep,
+		// DeepSeek 在中文长 prompt 下 tool_call 在流末尾才出现,
+		// eino 默认 firstChunkStreamToolCallChecker 只看第一帧会漏判。
 		StreamToolCallChecker: scanAllStreamForToolCall,
 	})
 	if err != nil {

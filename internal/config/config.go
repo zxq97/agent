@@ -30,6 +30,14 @@ type LLMConf struct {
 	AgentBindings map[string]string `yaml:"agent_bindings"`
 }
 
+// AgentConf agent 行为配置。
+type AgentConf struct {
+	// MaxStep React loop 的最大步数(每次 chatModel/toolsNode 切换算 1 步)。
+	// 默认 12(eino 内部 node数+10)。典型场景:4个 tool 连调约需 9 步;
+	// 留余量设 30,支持约 14 个 tool call 的复杂对话。
+	MaxStep int `yaml:"max_step"`
+}
+
 // TycheMCPConf 接 tyche MCP server 的配置。
 //
 // tyche 是 C 端租车 API,自带一套 JSON-RPC 2.0 over HTTP 的 MCP server
@@ -53,6 +61,7 @@ type Config struct {
 	Env   string       `yaml:"env"` // dev / pre / prod
 	LLM   LLMConf      `yaml:"llm"`
 	Tyche TycheMCPConf `yaml:"tyche"`
+	Agent AgentConf    `yaml:"agent"`
 }
 
 // Load 从指定 yaml 加载并展开 env 占位。
@@ -92,6 +101,9 @@ func expandEnv(s string) string {
 func (c *Config) applyDefaults() {
 	if c.Tyche.Timeout == 0 {
 		c.Tyche.Timeout = 30
+	}
+	if c.Agent.MaxStep == 0 {
+		c.Agent.MaxStep = 30
 	}
 	for k, p := range c.LLM.Providers {
 		if p.Timeout == 0 {

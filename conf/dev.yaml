@@ -28,3 +28,9 @@ tyche:
   # 留空时,tyche 端若白名单也为空可放行(便于本地调试)。
   phone: "00016257309"
   timeout: 30
+
+agent:
+  # React loop 最大步数。每次 chatModel/toolsNode 切换各算 1 步。
+  # 典型完整流程(locations+resolve_poi+search_quotes+get_order_details+回答)约 9 步。
+  # 设 30 保留多轮追问和重试的余量,防止 exceeds max steps 报错。
+  max_step: 30

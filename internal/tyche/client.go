@@ -108,21 +108,67 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolListItem, error) {
 }
 
 // CallTool 调 tools/call。argumentsJSON 是 tool args 的 JSON 字符串(eino 给的就是这个形式)。
+//
+// 自动修正:tyche 的 RentalInfo.date_time 校验要求格式为 "2006-01-02 15:04:05"(含秒)。
+// LLM 有时会省略秒位(如 "2026-06-15 18:00"),在发送前自动补上 ":00"。
 func (c *Client) CallTool(ctx context.Context, name, argumentsJSON string) (*CallToolResult, error) {
-	var args json.RawMessage
-	if argumentsJSON == "" {
-		args = json.RawMessage("{}")
-	} else {
-		args = json.RawMessage(argumentsJSON)
+	raw := argumentsJSON
+	if raw == "" {
+		raw = "{}"
 	}
+	// 补秒:把所有 "YYYY-MM-DD HH:MM"(不带秒)的时间字符串补成 "YYYY-MM-DD HH:MM:00"
+	raw = fixDateTimeSeconds(raw)
+
 	var out CallToolResult
 	if err := c.callRaw(ctx, "tools/call", struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
-	}{Name: name, Arguments: args}, &out); err != nil {
+	}{Name: name, Arguments: json.RawMessage(raw)}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// fixDateTimeSeconds 用正则把 JSON 里所有 "YYYY-MM-DD HH:MM" 格式的时间字符串补上 ":00"。
+// 只匹配 19 位以下(缺秒)的情况,已有秒位的不会重复追加。
+func fixDateTimeSeconds(s string) string {
+	// 匹配 "YYYY-MM-DD HH:MM" 后面不接 :SS 的情况
+	// 用简单字节扫描,避免 import regexp 增加依赖。
+	out := make([]byte, 0, len(s)+8)
+	for i := 0; i < len(s); i++ {
+		out = append(out, s[i])
+		// 检测是否到了一个完整的 "YYYY-MM-DD HH:MM" 末尾
+		// 即 out 末尾 16 个字节是时间字符串,且下一个字节是双引号
+		if i+1 < len(s) && s[i+1] == '"' && len(out) >= 16 {
+			tail := string(out[len(out)-16:])
+			if isDateTimeWithoutSec(tail) {
+				out = append(out, ':', '0', '0')
+			}
+		}
+	}
+	return string(out)
+}
+
+// isDateTimeWithoutSec 判断 16 字节字符串是否符合 "YYYY-MM-DD HH:MM" 格式。
+func isDateTimeWithoutSec(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	// 检查位置:0123-56-89 12:14
+	return isDigits(s[0:4]) && s[4] == '-' &&
+		isDigits(s[5:7]) && s[7] == '-' &&
+		isDigits(s[8:10]) && s[10] == ' ' &&
+		isDigits(s[11:13]) && s[13] == ':' &&
+		isDigits(s[14:16])
+}
+
+func isDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) callRaw(ctx context.Context, method string, params interface{}, out interface{}) error {

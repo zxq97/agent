@@ -5,6 +5,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/cloudwego/eino/components/model"
@@ -35,14 +36,26 @@ func Register(name string, b Builder) {
 
 // Factory 维护"配置名 -> 构造好的 ChatModel"映射,带懒加载缓存。
 type Factory struct {
-	cfg   *config.LLMConf
-	mu    sync.Mutex
-	cache map[string]ChatModel
+	cfg    *config.LLMConf
+	mu     sync.Mutex
+	cache  map[string]ChatModel
+	logOut io.Writer // 非 nil 时,Get 返回的 ChatModel 自动套 LoggingChatModel
 }
 
 // NewFactory 构造工厂,不真正建立 model(懒加载)。
 func NewFactory(cfg *config.LLMConf) *Factory {
 	return &Factory{cfg: cfg, cache: map[string]ChatModel{}}
+}
+
+// SetLogger 打开/关闭 LLM 调用日志。设置后 Get 返回的所有 model 都会套一层日志包装,
+// 每次 Generate/Stream 的入参 messages、出参 content + tool_calls 都写到 w。
+// w 为 nil 时关闭。
+func (f *Factory) SetLogger(w io.Writer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logOut = w
+	// 清缓存:已构建的 model 没套日志层,重新 Get 时会按新设置包装
+	f.cache = map[string]ChatModel{}
 }
 
 // Get 拿到一个 ChatModel:
@@ -78,6 +91,9 @@ func (f *Factory) Get(ctx context.Context, bindingKey string) (ChatModel, error)
 	m, err := build(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("llm: build %q: %w", providerCfgName, err)
+	}
+	if f.logOut != nil {
+		m = NewLoggingChatModel(m, f.logOut)
 	}
 	f.cache[providerCfgName] = m
 	return m, nil

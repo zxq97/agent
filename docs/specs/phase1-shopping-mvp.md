@@ -7,9 +7,7 @@
 
 ## 1. Context
 
-P1 是项目的最小可工作单元。之前一版直连 saas-api `/inner/price/list` 的尝试已废弃 —— 字段缺(没车型可读名/没图片)、地理点要自己兜底,**等价于在 agent 侧重新造一遍 tyche 已经做过的事**。
-
-[/Users/didi/work/tyche/controller/mcp/controller.go](file:///Users/didi/work/tyche/controller/mcp/controller.go) 已经把 7 个 C 端工具封装好(JSON-RPC 2.0),其中 6 个**只读**工具直接给 agent 用最划算。
+P1 是项目的最小可工作单元。agent 通过 tyche MCP(JSON-RPC 2.0)接入 6 个只读工具，覆盖地点搜索、报价、价格明细、订单查询全链路。
 
 P1 验收完成意味着:agent loop、LLM 工厂、tyche MCP client、CLI 交互、日志诊断 整条主链路通。
 
@@ -114,7 +112,7 @@ text/template 渲染,显式描述 6 个工具 + 调用顺序(先 search_location
 
 | # | 决策 | 理由 |
 |---|---|---|
-| P1-D1 | **接 tyche MCP 而非自己直连 saas-api** | tyche 已有 7 个 C 端工具,字段质量(车名/品牌/分类/燃料/座位/图片/POI)远好于 saas-api inner;省去自己写经纬度兜底、车型字典联表 |
+| P1-D1 | 接 tyche MCP | tyche 已有 7 个 C 端工具，字段包含车名/品牌/分类/燃料/座位/图片/POI，开箱即用 |
 | P1-D2 | **不**用 `modelcontextprotocol/go-sdk` 接 tyche | tyche 的 MCP 是简化版纯 POST + JSON-RPC,go-sdk 的 StreamableClientTransport 强依赖 SSE,不兼容;自写 100 行轻量 client 更稳 |
 | P1-D3 | tool 白名单 isAllowedTool | 防止 `rental_create_order` 被 LLM 调用;P5 真要做下单跳转再单独评审 |
 | P1-D4 | 自定义 `StreamToolCallChecker` 扫整流 | DeepSeek 中文场景下 tool_call 在流末尾,eino 默认只看第一帧会漏 |
