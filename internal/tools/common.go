@@ -67,7 +67,37 @@ func All(ctx context.Context, d *Deps) ([]tool.BaseTool, error) {
 		}
 		out = append(out, t)
 	}
+
+	// P5: 本地 tool(纯计算/规则,不走 tyche,不查后端)。
+	local, err := localTools()
+	if err != nil {
+		return nil, fmt.Errorf("build local tools: %w", err)
+	}
+	out = append(out, local...)
 	return out, nil
+}
+
+// localTools 返回 P5 引入的本地 InvokableTool:
+//   - check_qualification:驾龄 → 可租车型(本地规则表)
+//   - estimate_trip_cost:行程总费拆项估算(经验公式)
+//   - optimize_pickup_time:取还时间方案对比(本地计费估算)
+//
+// 这些 tool 没有后端数据源,在 agent 进程内完成,因此不受 isAllowedTool
+// (那是给 tyche tool 的写操作白名单)约束。
+func localTools() ([]tool.BaseTool, error) {
+	q, err := NewCheckQualificationTool()
+	if err != nil {
+		return nil, fmt.Errorf("check_qualification: %w", err)
+	}
+	c, err := NewEstimateTripCostTool()
+	if err != nil {
+		return nil, fmt.Errorf("estimate_trip_cost: %w", err)
+	}
+	t, err := NewOptimizePickupTimeTool()
+	if err != nil {
+		return nil, fmt.Errorf("optimize_pickup_time: %w", err)
+	}
+	return []tool.BaseTool{q, c, t}, nil
 }
 
 // isAllowedTool 是 LLM 可见 tool 的白名单。

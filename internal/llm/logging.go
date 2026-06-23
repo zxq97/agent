@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -25,7 +25,7 @@ import (
 //	[llm-out] turn=1 finish=stop content_len=42 tool_calls=1
 //	   tool_call#0 name=list_quotes args={...}
 type LoggingChatModel struct {
-	inner einomodel.ToolCallingChatModel
+	inner model.ToolCallingChatModel
 	w     io.Writer
 
 	mu   sync.Mutex
@@ -33,7 +33,7 @@ type LoggingChatModel struct {
 }
 
 // NewLoggingChatModel 包一层。w 为 nil 时直接返回 inner(no-op)。
-func NewLoggingChatModel(inner einomodel.ToolCallingChatModel, w io.Writer) einomodel.ToolCallingChatModel {
+func NewLoggingChatModel(inner model.ToolCallingChatModel, w io.Writer) model.ToolCallingChatModel {
 	if w == nil {
 		return inner
 	}
@@ -48,7 +48,7 @@ func (l *LoggingChatModel) nextTurn() int {
 }
 
 // Generate 同步生成,落入参/出参日志。
-func (l *LoggingChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...einomodel.Option) (*schema.Message, error) {
+func (l *LoggingChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
 	turn := l.nextTurn()
 	l.logInput(turn, input)
 	start := time.Now()
@@ -62,7 +62,7 @@ func (l *LoggingChatModel) Generate(ctx context.Context, input []*schema.Message
 // 注意:为了不破坏 eino 内部的流式契约,Stream 必须返回一个 StreamReader,
 // 直接交给上层(react.Agent)处理流式累加。我们用 schema.StreamReader 的 Copy
 // 拿到一份副本,在 goroutine 里累加完整消息再写日志,主 stream 不受影响。
-func (l *LoggingChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
+func (l *LoggingChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
 	turn := l.nextTurn()
 	l.logInput(turn, input)
 	start := time.Now()
@@ -211,7 +211,7 @@ func truncate(s string, n int) string {
 }
 
 // WithTools 透传 — 同时把新返回的 model 也包一层日志。
-func (l *LoggingChatModel) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
+func (l *LoggingChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
 	newInner, err := l.inner.WithTools(tools)
 	if err != nil {
 		return nil, err

@@ -67,6 +67,7 @@
 - **错误处理**:tool 内 panic 一律转 error,error 信息要"人话"(LLM 会读)
 - **配置**:`pre/prod.yaml` 强制走 `${DEEPSEEK_API_KEY}` 等 env 占位;`dev.yaml` 允许写明文 key(本地开发用,**入库前自行确认**)
 - **写操作禁忌**:**严禁**注册 `rental_create_order` / `pay` / `refund` / `modify_order` 类 tool 到 LLM 可见 ToolSet([internal/tools/common.go:isAllowedTool](internal/tools/common.go) 维护白名单)
+- **import 别名**:不要给 import 加别名。**唯一合理场景**:同一文件 import 了**两个相同包名**的不同包(例如两个 `client`),此时给其中一个加别名以消歧。**当前文件所在包名与 import 包名相同不算冲突** —— Go 编译器和阅读者都能区分(`http.X` 始终指 import 的那个,本包内符号 unqualified 访问)。除此以外用原包名访问,即便路径很长。
 
 ## 安全护栏
 

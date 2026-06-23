@@ -34,3 +34,24 @@ agent:
   # 典型完整流程(locations+resolve_poi+search_quotes+get_order_details+回答)约 9 步。
   # 设 30 保留多轮追问和重试的余量,防止 exceeds max steps 报错。
   max_step: 30
+
+# P4: HTTP 服务化配置
+http:
+  addr: ":8080"
+  read_timeout: 30
+  write_timeout: 600        # SSE 长连接,需要较大写超时
+
+# P4: Session 持久化(Redis)
+# dev 环境若 redis_addr 留空,会自动降级为内存 store
+session:
+  redis_addr: ""            # 例如 "127.0.0.1:6379"
+  password: ""
+  db: 0
+  ttl_hours: 24
+  key_prefix: "agent:session"
+
+# P4: 限流(按 user_id token bucket)
+# 都为 0 时不限流(dev 友好)
+ratelimit:
+  per_minute: 0
+  per_day: 0

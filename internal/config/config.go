@@ -56,12 +56,42 @@ type TycheMCPConf struct {
 	Timeout int `yaml:"timeout"`
 }
 
+// HTTPConf P4 HTTP 服务的配置。
+type HTTPConf struct {
+	// Addr 监听地址,如 ":8080"。
+	Addr string `yaml:"addr"`
+	// ReadTimeout 单次请求读超时(秒)。
+	ReadTimeout int `yaml:"read_timeout"`
+	// WriteTimeout 单次请求写超时(秒)。SSE 长连接需要设较大值,默认 600。
+	WriteTimeout int `yaml:"write_timeout"`
+}
+
+// SessionConf P4 Session 持久化(Redis)的配置。
+type SessionConf struct {
+	RedisAddr string `yaml:"redis_addr"`
+	Password  string `yaml:"password"`
+	DB        int    `yaml:"db"`
+	// TTLHours 会话 history 在 Redis 的存活小时数,默认 24。
+	TTLHours int `yaml:"ttl_hours"`
+	// KeyPrefix Redis key 前缀,默认 "agent:session"。
+	KeyPrefix string `yaml:"key_prefix"`
+}
+
+// RateLimitConf P4 限流配置。按 user_id 维度做 token bucket。
+type RateLimitConf struct {
+	PerMinute int `yaml:"per_minute"`
+	PerDay    int `yaml:"per_day"`
+}
+
 // Config 全局配置入口。
 type Config struct {
-	Env   string       `yaml:"env"` // dev / pre / prod
-	LLM   LLMConf      `yaml:"llm"`
-	Tyche TycheMCPConf `yaml:"tyche"`
-	Agent AgentConf    `yaml:"agent"`
+	Env       string        `yaml:"env"` // dev / pre / prod
+	LLM       LLMConf       `yaml:"llm"`
+	Tyche     TycheMCPConf  `yaml:"tyche"`
+	Agent     AgentConf     `yaml:"agent"`
+	HTTP      HTTPConf      `yaml:"http"`      // P4
+	Session   SessionConf   `yaml:"session"`   // P4
+	RateLimit RateLimitConf `yaml:"ratelimit"` // P4
 }
 
 // Load 从指定 yaml 加载并展开 env 占位。
@@ -110,5 +140,29 @@ func (c *Config) applyDefaults() {
 			p.Timeout = 60
 			c.LLM.Providers[k] = p
 		}
+	}
+	// HTTP 服务默认值
+	if c.HTTP.Addr == "" {
+		c.HTTP.Addr = ":8080"
+	}
+	if c.HTTP.ReadTimeout == 0 {
+		c.HTTP.ReadTimeout = 30
+	}
+	if c.HTTP.WriteTimeout == 0 {
+		c.HTTP.WriteTimeout = 600
+	}
+	// Session 默认值
+	if c.Session.TTLHours == 0 {
+		c.Session.TTLHours = 24
+	}
+	if c.Session.KeyPrefix == "" {
+		c.Session.KeyPrefix = "agent:session"
+	}
+	// 限流默认值
+	if c.RateLimit.PerMinute == 0 {
+		c.RateLimit.PerMinute = 30
+	}
+	if c.RateLimit.PerDay == 0 {
+		c.RateLimit.PerDay = 1000
 	}
 }

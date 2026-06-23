@@ -104,10 +104,14 @@ func buildShoppingAgent(ctx context.Context, d SystemDeps) (adk.Agent, error) {
 		"rental_search_quotes":     true,
 		"rental_get_order_details": true,
 		"rental_get_reservation":   true,
+		// P5 本地决策辅助 / 资质工具
+		"check_qualification":   true,
+		"estimate_trip_cost":    true,
+		"optimize_pickup_time":  true,
 	})
 	return adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        "ShoppingAgent",
-		Description: "处理用户的挑车、报价、价格明细、订单查询等导购类需求。",
+		Description: "处理用户的挑车、报价、价格明细、订单查询、资质预检、行程估算、取还时间优化等导购类需求。",
 		Instruction: sysPrompt,
 		Model:       chat,
 		ToolsConfig: adk.ToolsConfig{

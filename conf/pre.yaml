@@ -25,3 +25,25 @@ tyche:
   endpoint: "${TYCHE_MCP_ENDPOINT:-http://tyche.pre.intra/car/rental/inner/mcp}"
   phone: "${TYCHE_MCP_PHONE}"
   timeout: 30
+
+agent:
+  max_step: 30
+
+# P4: HTTP 服务化
+http:
+  addr: ":8080"
+  read_timeout: 30
+  write_timeout: 600
+
+# P4: Redis Session 持久化
+session:
+  redis_addr: "${REDIS_ADDR:-redis.pre.intra:6379}"
+  password: "${REDIS_PASSWORD}"
+  db: 0
+  ttl_hours: 24
+  key_prefix: "agent:session"
+
+# P4: 限流(按 user_id token bucket)
+ratelimit:
+  per_minute: 30
+  per_day: 1000

@@ -102,7 +102,7 @@ C 端租车用户面对车型、套餐、保险、各类费用项时决策成本
 | **P1** | 骨架 + 导购 MVP(CLI):eino 项目骨架、DeepSeek 接入、**tyche MCP client**(6 个只读工具)、单 ReAct agent、CLI 跑通"首都机场周末 SUV 推荐" | ~16h | [phase1-shopping-mvp.md](specs/phase1-shopping-mvp.md) |
 | **P2** | 价格明细 + 保险推荐(仍 CLI):`rental_get_order_details` 一次返回价格明细 + 保险列表；补充 prompt 解读规则、驾龄推荐逻辑、用户画像槽位 | ~16h | [phase2-price-detail-insurance.md](specs/phase2-price-detail-insurance.md) |
 | **P3** | 知识库 + 条款解读 + supervisor:灌入 billing/fulfillment/insurance 知识、`Retriever` + BM25、`search_knowledge` tool、答复带 `[来源]`、拆分多子 agent | ~24h | [phase3-knowledge-supervisor.md](specs/phase3-knowledge-supervisor.md) |
-| **P4** | HTTP 服务化 + Session:`cmd/http` + SSE、Redis session、鉴权限流。**MCP 走 tyche,不再在 saas-api 加子域**(原 P4 计划已并入 tyche),仅 tyche 不覆盖的能力(B 端/运营/资金)才考虑 saas-api 侧 BFF | ~24h | [phase4-http-session-mcp.md](specs/phase4-http-session-mcp.md) |
+| **P4** | HTTP 服务化 + Session:`cmd/http` + SSE、Redis session、公司鉴权 / 限流 / trace 中间件。后端能力沿用 tyche MCP | ~20h | [phase4-http-session-mcp.md](specs/phase4-http-session-mcp.md) |
 | **P5** | 扩展能力:决策辅助 / 资质闭环 / 售后 FAQ / 比价异议 + 对应子 agent | ~35h | [specs/phase5-extensions.md](specs/phase5-extensions.md) |
 | **P6** | 生产化:监控降级限流、风险词拦截、转人工、对话评估集、A/B、可选拆独立进程套 trpc-a2a-go | ~30h | [specs/phase6-productionize.md](specs/phase6-productionize.md) |
 
