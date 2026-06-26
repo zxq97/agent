@@ -53,6 +53,13 @@
 - [docs/specs/phase1-shopping-mvp.md](docs/specs/phase1-shopping-mvp.md) —— P1 导购 MVP(CLI)
 - [docs/specs/phase2-price-detail-insurance.md](docs/specs/phase2-price-detail-insurance.md) —— P2 价格明细 + 保险
 - [docs/specs/phase3-knowledge-supervisor.md](docs/specs/phase3-knowledge-supervisor.md) —— P3 知识库 + supervisor 多 agent
+- [docs/specs/phase3.5-decide-capability-refactor.md](docs/specs/phase3.5-decide-capability-refactor.md) —— P3.5 借鉴 tyche V4 工程化重构(总纲 / 索引)
+  - [phase3.5.1-cleanup.md](docs/specs/phase3.5.1-cleanup.md) —— 收口与勘误
+  - [phase3.5.2-decide-core.md](docs/specs/phase3.5.2-decide-core.md) —— 决策核心(Decider + Capability + ID 托管)
+  - [phase3.5.3-context-streaming.md](docs/specs/phase3.5.3-context-streaming.md) —— 上下文与流式提质
+  - [phase3.5.4-sse-guide-feedback.md](docs/specs/phase3.5.4-sse-guide-feedback.md) —— SSE 协议 + 引导/反馈
+  - [phase3.5.5-productionize-infra.md](docs/specs/phase3.5.5-productionize-infra.md) —— 生产化基建
+  - [phase3.5.6-prompt-knowledge.md](docs/specs/phase3.5.6-prompt-knowledge.md) —— Prompt 工程化沉淀
 - [docs/specs/phase4-http-session-mcp.md](docs/specs/phase4-http-session-mcp.md) —— P4 HTTP 服务化 + agent-bff MCP
 - [docs/specs/phase5-extensions.md](docs/specs/phase5-extensions.md) —— P5 扩展能力
 - [docs/specs/phase6-productionize.md](docs/specs/phase6-productionize.md) —— P6 生产化
