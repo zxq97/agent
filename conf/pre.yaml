@@ -1,0 +1,71 @@
+env: pre
+
+llm:
+  default: deepseek-chat
+  providers:
+    deepseek-chat:
+      name: deepseek
+      model: deepseek-chat
+      base_url: https://api.deepseek.com
+      api_key: ${DEEPSEEK_API_KEY}
+      timeout: 60
+    deepseek-reasoner:
+      name: deepseek
+      model: deepseek-reasoner
+      base_url: https://api.deepseek.com
+      api_key: ${DEEPSEEK_API_KEY}
+      timeout: 90
+  agent_bindings:
+    decide: deepseek-chat
+    filter_interpreter: deepseek-reasoner
+    search_guide: deepseek-chat
+    price_detail: deepseek-chat
+    insurance: deepseek-chat
+    compare: deepseek-chat
+    rules: deepseek-chat
+
+tyche:
+  endpoint: ${TYCHE_MCP_ENDPOINT}
+  phone: ${TYCHE_PHONE}
+  timeout: 30
+
+agent:
+  max_step: 30
+  enable_local_tools: false
+  mode: pipeline
+
+http:
+  addr: ":8080"
+  read_timeout: 30
+  write_timeout: 600
+
+session:
+  redis_addr: ${REDIS_ADDR}
+  password: ${REDIS_PASSWORD:-}
+  db: 0
+  ttl_hours: 24
+  key_prefix: "agent:session"
+
+ratelimit:
+  per_minute: 30
+  per_day: 1000
+
+audit:
+  enabled: false
+  endpoint: ${AUDIT_ENDPOINT:-}
+  segment_chars: 300
+
+access_lock:
+  enabled: false
+  ttl_seconds: 60
+  fail_open: true
+
+agenthub:
+  host: ${AGENTHUB_HOST}
+  retrieval_api_key: ${AGENTHUB_RETRIEVAL_KEY}
+  timeout: 10
+
+log:
+  dir: ${LOG_DIR:-.logs}
+  stderr: false
+  file_prefix: agent

@@ -8,6 +8,11 @@
 *.so
 *.dylib
 
+# Go compiled binaries (no extension on macOS/Linux)
+/http
+/cli
+/rental-agent
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -33,3 +38,9 @@ go.work.sum
 
 # Claude Code
 .claude/
+.logs/
+
+# Planning files
+findings.md
+progress.md
+task_plan.md

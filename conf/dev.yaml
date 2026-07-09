@@ -1,0 +1,81 @@
+env: dev
+
+llm:
+  default: deepseek-chat
+  providers:
+    deepseek-chat:
+      name: deepseek
+      model: deepseek-chat
+      base_url: https://api.deepseek.com
+      # dev 本地可写明文 key,入库前自行确认;也支持 ${DEEPSEEK_API_KEY}
+      api_key: 
+      timeout: 60
+    deepseek-reasoner:
+      name: deepseek
+      model: deepseek-reasoner
+      base_url: https://api.deepseek.com
+      api_key: 
+      timeout: 90
+  # 按环节绑模型。铁律:带 function calling 的环节(只有 decide)必须 chat,绝不能绑 reasoner。
+  # filter_interpreter 是复杂自然语言→筛选需求的 JSON 解析旁路,不使用 function calling。
+  agent_bindings:
+    decide: deepseek-chat        # 必须 chat —— 强依赖 function calling
+    filter_interpreter: deepseek-reasoner
+    search_guide: deepseek-chat  # 话术,可换更便宜 lite
+    price_detail: deepseek-chat
+    insurance: deepseek-chat
+    compare: deepseek-chat        # 可灰度试 reasoner,但默认 chat
+    rules: deepseek-chat
+
+tyche:
+  # tyche MCP server 入口(本地调试可指向预发);连不通时 CLI 会打印指引,不 panic
+  endpoint: http://tyche.offline.intra.xiaojukeji.com/car/rental/inner/mcp
+  phone: 00012050538
+  timeout: 30
+
+guide:
+  # rental-guide 集群(guide/store/list/agent 报价+菜单);与 tyche MCP 可指向同一地址
+  endpoint: http://tyche.offline.intra.xiaojukeji.com
+  phone: 00012050538
+  timeout: 30
+
+agent:
+  max_step: 30
+  enable_local_tools: false   # 占位工具默认不注册
+  mode: pipeline
+
+http:
+  addr: ":8080"
+  read_timeout: 30
+  write_timeout: 600
+
+session:
+  redis_addr: "127.0.0.1:6379"
+  ttl_hours: 24
+  key_prefix: "agent:session"
+
+ratelimit:
+  per_minute: 30
+  per_day: 1000
+
+audit:
+  enabled: false
+  endpoint: ${AUDIT_ENDPOINT:-}
+  segment_chars: 300
+
+access_lock:
+  enabled: false
+  ttl_seconds: 60
+  fail_open: true
+
+agenthub:
+  host: http://agenthub.intra.xiaojukeji.com
+  retrieval_api_key: ${AGENTHUB_RETRIEVAL_KEY:-}
+  timeout: 10
+
+log:
+  # 日志目录,按天切分为 <dir>/<file_prefix>-YYYY-MM-DD.log
+  dir: .logs
+  # dev 本地方便看流,默认兼输出 stderr;CLI/HTTP 入口 -q/-v 可覆盖
+  stderr: true
+  file_prefix: agent
