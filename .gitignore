@@ -33,3 +33,10 @@ go.work.sum
 
 # Claude Code
 .claude/
+
+# Local runtime logs
+.logs/
+
+findings.md
+progress.md
+task_plan.md

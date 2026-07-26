@@ -1,0 +1,23 @@
+llm:
+  endpoint: https://api.deepseek.com
+  api_key: sk-c4cceb7a99934b9fa1d1f7bd051d5750
+  timeout_sec: 60
+
+guide:
+  endpoint: http://tyche.offline.intra.xiaojukeji.com
+  phone: 00012050538
+  timeout: 30
+
+maps:
+  endpoint: http://100.69.238.11:8000
+  product_id: "100004"
+  acc_key: PC6HA-HBZ4A-85MLQ-NBMB7-D82PH-U32F1
+  app_version: "1.0.4"
+  platform: inner.rental
+  app_id: didi_service
+  map_type: dmap
+  coordinate_type: gcj02
+  requester_type: inner.rental
+  lang: zh-CN
+  caller_id: rental_poi_search
+  place_type: "2"

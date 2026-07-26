@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>小租 · 租车智能助手</title>
+  <style>
+    :root {
+      --ink: #19221d;
+      --muted: #6f7d74;
+      --line: #dce5de;
+      --paper: #f6f8f4;
+      --panel: rgba(255, 255, 255, .9);
+      --brand: #176b4d;
+      --brand-2: #22a06b;
+      --brand-soft: #e7f4ed;
+      --amber: #f2ad3d;
+      --danger: #c94444;
+      --shadow: 0 18px 55px rgba(29, 56, 43, .11);
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --radius-sm: 11px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 8%, rgba(34, 160, 107, .12), transparent 28rem),
+        radial-gradient(circle at 92% 88%, rgba(242, 173, 61, .11), transparent 30rem),
+        var(--paper);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    button, textarea, input { font: inherit; }
+    button { color: inherit; }
+
+    .login-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        linear-gradient(135deg, rgba(20, 91, 65, .98), rgba(21, 53, 43, .96)),
+        var(--brand);
+    }
+
+    .login-card {
+      width: min(430px, 100%);
+      padding: 38px;
+      border: 1px solid rgba(255, 255, 255, .4);
+      border-radius: 30px;
+      background: rgba(255, 255, 255, .96);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .24);
+    }
+
+    .brand-mark {
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 24px;
+      border-radius: 17px;
+      color: white;
+      background: linear-gradient(145deg, var(--brand-2), var(--brand));
+      box-shadow: 0 12px 28px rgba(23, 107, 77, .28);
+      font-size: 27px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    .login-card h1 {
+      margin: 0;
+      font-size: 30px;
+      letter-spacing: -.04em;
+    }
+
+    .login-card .intro {
+      margin: 12px 0 26px;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .field-label {
+      display: block;
+      margin: 0 0 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .login-card input {
+      width: 100%;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      outline: 0;
+      background: white;
+      transition: .2s ease;
+    }
+
+    .login-card input:focus {
+      border-color: var(--brand-2);
+      box-shadow: 0 0 0 4px rgba(34, 160, 107, .12);
+    }
+
+    .primary-btn {
+      width: 100%;
+      margin-top: 14px;
+      padding: 13px 18px;
+      border: 0;
+      border-radius: 12px;
+      color: white;
+      background: linear-gradient(135deg, var(--brand-2), var(--brand));
+      cursor: pointer;
+      font-weight: 750;
+      box-shadow: 0 10px 24px rgba(23, 107, 77, .2);
+    }
+
+    .app {
+      display: none;
+      height: 100%;
+      padding: 14px;
+    }
+
+    .shell {
+      width: min(1600px, 100%);
+      height: 100%;
+      margin: auto;
+      display: grid;
+      grid-template-columns: 250px minmax(460px, 1fr) 300px;
+      overflow: hidden;
+      border: 1px solid rgba(204, 217, 208, .9);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, .76);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .sidebar, .statebar {
+      min-width: 0;
+      background: rgba(249, 251, 248, .82);
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+    }
+
+    .sidebar-head {
+      padding: 23px 20px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .mini-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 850;
+      letter-spacing: -.02em;
+    }
+
+    .mini-logo {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      color: white;
+      background: linear-gradient(145deg, var(--brand-2), var(--brand));
+    }
+
+    .user-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .link-btn {
+      padding: 0;
+      border: 0;
+      color: var(--brand);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .new-chat {
+      margin: 14px 14px 8px;
+      padding: 11px 14px;
+      border: 1px solid #b9d8c8;
+      border-radius: 12px;
+      color: var(--brand);
+      background: var(--brand-soft);
+      cursor: pointer;
+      font-weight: 750;
+      text-align: left;
+    }
+
+    .session-list {
+      flex: 1;
+      overflow: auto;
+      padding: 4px 9px 18px;
+    }
+
+    .session-item {
+      position: relative;
+      margin: 4px 0;
+      padding: 11px 34px 11px 12px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+
+    .session-item:hover { background: white; border-color: var(--line); }
+    .session-item.active { background: white; border-color: #bdd9ca; box-shadow: 0 8px 18px rgba(33, 84, 60, .07); }
+    .session-preview { overflow: hidden; color: #39463e; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .session-time { margin-top: 5px; color: #94a099; font-size: 11px; }
+    .session-delete {
+      position: absolute;
+      top: 10px;
+      right: 8px;
+      width: 24px;
+      height: 24px;
+      display: none;
+      border: 0;
+      border-radius: 8px;
+      color: #9b6d6d;
+      background: transparent;
+      cursor: pointer;
+    }
+    .session-item:hover .session-delete { display: block; }
+    .session-delete:hover { color: var(--danger); background: #fff0f0; }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: rgba(255, 255, 255, .54);
+    }
+
+    .topbar {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 13px 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .7);
+    }
+
+    .topbar-title { font-weight: 800; }
+    .topbar-subtitle { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .connection {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: white;
+      font-size: 11px;
+    }
+    .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #9aa59e; }
+    .connection.online .connection-dot { background: var(--brand-2); box-shadow: 0 0 0 4px rgba(34, 160, 107, .12); }
+    .connection.offline .connection-dot { background: var(--danger); }
+
+    .messages {
+      flex: 1;
+      overflow: auto;
+      padding: 24px clamp(18px, 4vw, 54px);
+      scroll-behavior: smooth;
+    }
+
+    .welcome {
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+      text-align: center;
+    }
+
+    .welcome-inner { max-width: 540px; }
+    .welcome-icon {
+      width: 70px;
+      height: 70px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 18px;
+      border: 1px solid #c7e0d2;
+      border-radius: 23px;
+      background: linear-gradient(145deg, white, var(--brand-soft));
+      font-size: 34px;
+      box-shadow: 0 15px 32px rgba(28, 91, 63, .11);
+    }
+    .welcome h2 { margin: 0; font-size: 25px; letter-spacing: -.035em; }
+    .welcome p { margin: 10px 0 20px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+
+    .suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+    .suggestion, .quick-action {
+      padding: 8px 11px;
+      border: 1px solid #cbded3;
+      border-radius: 999px;
+      color: #365b49;
+      background: rgba(255, 255, 255, .9);
+      cursor: pointer;
+      font-size: 12px;
+      transition: .18s ease;
+    }
+    .suggestion:hover, .quick-action:hover { border-color: var(--brand-2); color: var(--brand); transform: translateY(-1px); }
+
+    .message {
+      width: 100%;
+      display: flex;
+      gap: 11px;
+      margin: 0 auto 20px;
+      animation: rise .25s ease both;
+    }
+    .message.user { flex-direction: row-reverse; }
+    .avatar {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      color: var(--brand);
+      background: var(--brand-soft);
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .message.user .avatar { color: white; background: var(--brand); }
+    .message-content { min-width: 0; max-width: min(78%, 760px); }
+    .message.user .message-content { display: flex; flex-direction: column; align-items: flex-end; }
+    .bubble {
+      display: inline-block;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 5px 15px 15px 15px;
+      background: white;
+      box-shadow: 0 7px 20px rgba(31, 57, 44, .06);
+      font-size: 14px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .message.user .bubble {
+      border: 0;
+      border-radius: 15px 5px 15px 15px;
+      color: white;
+      background: linear-gradient(135deg, #23835f, var(--brand));
+    }
+
+    .turn-meta {
+      min-height: 18px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 6px;
+      color: #92a098;
+      font-size: 11px;
+    }
+    .turn-meta.processing { color: var(--brand); }
+    .turn-meta.error { color: var(--danger); }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .processing .status-dot { animation: pulse 1.25s infinite; }
+
+    .typing { display: inline-flex; gap: 4px; padding: 4px 1px; }
+    .typing i { width: 6px; height: 6px; border-radius: 50%; background: #91a098; animation: blink 1.3s infinite; }
+    .typing i:nth-child(2) { animation-delay: .15s; }
+    .typing i:nth-child(3) { animation-delay: .3s; }
+
+    .quick-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+
+    .vehicle-grid { display: grid; gap: 9px; margin-top: 10px; }
+    .vehicle-card {
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: linear-gradient(145deg, #fff, #fbfcfa);
+      box-shadow: 0 8px 20px rgba(34, 66, 50, .05);
+    }
+    .vehicle-top { display: flex; justify-content: space-between; gap: 12px; }
+    .vehicle-index { color: var(--brand); font-size: 11px; font-weight: 900; letter-spacing: .08em; }
+    .vehicle-name { margin-top: 3px; font-size: 14px; font-weight: 800; }
+    .vehicle-supplier { color: var(--muted); font-size: 11px; text-align: right; }
+    .vehicle-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .vehicle-tag { padding: 4px 7px; border-radius: 7px; color: #59675f; background: #eef2ee; font-size: 11px; }
+    .vehicle-price { margin-top: 10px; color: #b35c18; font-size: 13px; font-weight: 800; }
+
+    .input-area {
+      padding: 14px 20px 18px;
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, .84);
+    }
+    .composer {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      padding: 7px;
+      border: 1px solid #cfdad3;
+      border-radius: 17px;
+      background: white;
+      box-shadow: 0 10px 26px rgba(26, 63, 44, .06);
+    }
+    .composer:focus-within { border-color: var(--brand-2); box-shadow: 0 0 0 4px rgba(34, 160, 107, .09); }
+    textarea {
+      flex: 1;
+      min-height: 40px;
+      max-height: 130px;
+      padding: 9px 10px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      color: var(--ink);
+      background: transparent;
+      line-height: 1.5;
+    }
+    .send-btn {
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      border: 0;
+      border-radius: 13px;
+      color: white;
+      background: var(--brand);
+      cursor: pointer;
+      font-size: 18px;
+    }
+    .send-btn:disabled { cursor: not-allowed; opacity: .45; }
+    .input-hint { margin: 7px 5px 0; color: #96a199; font-size: 10px; }
+
+    .statebar {
+      overflow: auto;
+      padding: 20px 16px;
+      border-left: 1px solid var(--line);
+    }
+    .state-title { margin: 0 0 15px; font-size: 14px; font-weight: 850; }
+    .state-section {
+      margin-bottom: 11px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .82);
+    }
+    .state-label {
+      margin-bottom: 7px;
+      color: #87948c;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .state-value { font-size: 13px; line-height: 1.55; }
+    .state-empty { color: #9ba69f; }
+    .requirement-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .requirement-chip { padding: 5px 7px; border-radius: 8px; color: #375a49; background: var(--brand-soft); font-size: 11px; }
+    .pending-card { border-color: #ecd49d; background: #fff9eb; }
+    .pending-card .state-value { color: #745119; }
+    .result-count { color: var(--brand); font-size: 24px; font-weight: 900; }
+
+    .mobile-menu { display: none; border: 0; background: transparent; cursor: pointer; font-size: 19px; }
+
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes blink { 0%, 70%, 100% { opacity: .25; } 35% { opacity: 1; } }
+    @keyframes pulse { 50% { transform: scale(1.55); opacity: .45; } }
+
+    @media (max-width: 1100px) {
+      .shell { grid-template-columns: 230px minmax(440px, 1fr); }
+      .statebar { display: none; }
+    }
+
+    @media (max-width: 760px) {
+      .app { padding: 0; }
+      .shell { grid-template-columns: 1fr; border: 0; border-radius: 0; }
+      .sidebar {
+        position: fixed;
+        z-index: 10;
+        inset: 0 auto 0 0;
+        width: min(82vw, 300px);
+        transform: translateX(-105%);
+        transition: transform .22s ease;
+        box-shadow: 18px 0 45px rgba(0, 0, 0, .15);
+      }
+      .sidebar.open { transform: translateX(0); }
+      .mobile-menu { display: block; }
+      .topbar { padding-inline: 14px; }
+      .messages { padding: 18px 13px; }
+      .message-content { max-width: 88%; }
+      .input-area { padding: 10px 11px 13px; }
+      .login-card { padding: 30px 24px; }
+    }
+  </style>
+</head>
+<body>
+  <section id="loginScreen" class="login-screen">
+    <form class="login-card" onsubmit="login(event)">
+      <div class="brand-mark">🚙</div>
+      <p class="eyebrow">Rental Guide Agent</p>
+      <h1>和小租聊聊你的行程</h1>
+      <p class="intro">输入一个本地测试用户 ID。会话只保存在当前服务进程内，适合直接联调地点、时间、车辆诉求和 Pending。</p>
+      <label class="field-label" for="userInput">用户 ID</label>
+      <input id="userInput" autocomplete="username" placeholder="例如 didi-test" required>
+      <button class="primary-btn" type="submit">进入对话</button>
+    </form>
+  </section>
+
+  <main id="app" class="app">
+    <div class="shell">
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-head">
+          <div class="mini-brand"><span class="mini-logo">租</span><span>小租助手</span></div>
+          <div class="user-line"><span>用户 · <strong id="userDisplay"></strong></span><button class="link-btn" onclick="switchUser()">切换</button></div>
+        </div>
+        <button class="new-chat" onclick="createSession()">＋ 新建对话</button>
+        <div id="sessionList" class="session-list"></div>
+      </aside>
+
+      <section class="main">
+        <header class="topbar">
+          <div style="display:flex;align-items:center;gap:10px">
+            <button class="mobile-menu" onclick="toggleSidebar()">☰</button>
+            <div>
+              <div class="topbar-title">租车需求对话</div>
+              <div id="sessionSubtitle" class="topbar-subtitle">新会话</div>
+            </div>
+          </div>
+          <div id="connection" class="connection"><span class="connection-dot"></span><span id="connectionText">检查服务</span></div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+
+        <footer class="input-area">
+          <div class="composer">
+            <textarea id="messageInput" rows="1" placeholder="例如：周五下午在虹桥机场取车，周日晚上还，想要 7 座 SUV"></textarea>
+            <button id="sendButton" class="send-btn" onclick="sendCurrentMessage()" aria-label="发送">↑</button>
+          </div>
+          <div class="input-hint">Enter 发送 · Shift + Enter 换行 · 同一会话内请求串行处理</div>
+        </footer>
+      </section>
+
+      <aside class="statebar">
+        <h2 class="state-title">当前 Session 状态</h2>
+        <div id="statePanel"></div>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    const state = {
+      userId: '',
+      sessionId: '',
+      clientSeq: 0,
+      streaming: false,
+      latestState: null
+    };
+
+    const $ = id => document.getElementById(id);
+
+    function init() {
+      $('userInput').value = localStorage.getItem('rental_agent_user') || '';
+      $('messages').innerHTML = welcomeMarkup();
+      renderState(null);
+      $('messageInput').addEventListener('input', autoResize);
+      $('messageInput').addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendCurrentMessage();
+        }
+      });
+      checkHealth();
+    }
+
+    async function checkHealth() {
+      try {
+        const response = await fetch('/healthz', { cache: 'no-store' });
+        if (!response.ok) throw new Error('offline');
+        $('connection').className = 'connection online';
+        $('connectionText').textContent = '后端在线';
+      } catch (_) {
+        $('connection').className = 'connection offline';
+        $('connectionText').textContent = '后端离线';
+      }
+    }
+
+    async function login(event) {
+      if (event) event.preventDefault();
+      const userId = $('userInput').value.trim();
+      if (!userId) return;
+      state.userId = userId;
+      localStorage.setItem('rental_agent_user', userId);
+      $('userDisplay').textContent = userId;
+      $('loginScreen').style.display = 'none';
+      $('app').style.display = 'block';
+      await loadSessions();
+      if (!state.sessionId) await createSession();
+      $('messageInput').focus();
+    }
+
+    function switchUser() {
+      if (state.streaming) return;
+      state.userId = '';
+      state.sessionId = '';
+      state.clientSeq = 0;
+      state.latestState = null;
+      $('app').style.display = 'none';
+      $('loginScreen').style.display = 'grid';
+      $('userInput').focus();
+    }
+
+    function toggleSidebar(forceClose) {
+      if (forceClose === true) {
+        $('sidebar').classList.remove('open');
+        return;
+      }
+      $('sidebar').classList.toggle('open');
+    }
+
+    async function apiJSON(url, options = {}) {
+      const response = await fetch(url, options);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      return payload;
+    }
+
+    async function loadSessions() {
+      try {
+        const sessions = await apiJSON(`/api/sessions?user_id=${encodeURIComponent(state.userId)}`);
+        renderSessions(sessions);
+        if (!state.sessionId && sessions.length) await openSession(sessions[0].session_id);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function renderSessions(sessions) {
+      const list = $('sessionList');
+      list.replaceChildren();
+      sessions.forEach(session => {
+        const item = document.createElement('div');
+        item.className = `session-item${session.session_id === state.sessionId ? ' active' : ''}`;
+        item.onclick = () => openSession(session.session_id);
+
+        const preview = document.createElement('div');
+        preview.className = 'session-preview';
+        preview.textContent = session.preview || '新对话';
+
+        const time = document.createElement('div');
+        time.className = 'session-time';
+        time.textContent = relativeTime(session.updated_at);
+
+        const remove = document.createElement('button');
+        remove.className = 'session-delete';
+        remove.textContent = '×';
+        remove.title = '删除会话';
+        remove.onclick = event => {
+          event.stopPropagation();
+          deleteSession(session.session_id);
+        };
+
+        item.append(preview, time, remove);
+        list.appendChild(item);
+      });
+    }
+
+    async function createSession() {
+      if (!state.userId || state.streaming) return;
+      try {
+        const detail = await apiJSON('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: state.userId })
+        });
+        state.sessionId = detail.session_id;
+        state.clientSeq = detail.client_seq || 0;
+        state.latestState = detail.state;
+        $('sessionSubtitle').textContent = compactSessionId(state.sessionId);
+        $('messages').innerHTML = welcomeMarkup();
+        renderState(detail.state);
+        await loadSessions();
+        toggleSidebar(true);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function openSession(sessionId) {
+      if (state.streaming) return;
+      try {
+        const detail = await apiJSON(`/api/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(state.userId)}`);
+        state.sessionId = sessionId;
+        state.clientSeq = detail.client_seq || 0;
+        state.latestState = detail.state;
+        $('sessionSubtitle').textContent = compactSessionId(sessionId);
+        const messages = $('messages');
+        messages.replaceChildren();
+        if (!detail.history || detail.history.length === 0) {
+          messages.innerHTML = welcomeMarkup();
+        } else {
+          detail.history.forEach(message => appendMessage(message.role, message.content));
+        }
+        renderState(detail.state);
+        await loadSessions();
+        toggleSidebar(true);
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function deleteSession(sessionId) {
+      if (state.streaming || !confirm('删除这个本地会话？')) return;
+      try {
+        await apiJSON(`/api/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(state.userId)}`, { method: 'DELETE' });
+        if (state.sessionId === sessionId) {
+          state.sessionId = '';
+          state.latestState = null;
+        }
+        await loadSessions();
+        if (!state.sessionId) await createSession();
+      } catch (error) {
+        showToast(error.message);
+      }
+    }
+
+    async function sendCurrentMessage() {
+      const input = $('messageInput');
+      const message = input.value.trim();
+      if (!message || state.streaming) return;
+      input.value = '';
+      autoResize.call(input);
+      await sendMessage(message);
+    }
+
+    async function sendMessage(message) {
+      if (state.streaming) return;
+      if (!state.sessionId) await createSession();
+      if (!state.sessionId) return;
+      removeWelcome();
+      appendMessage('user', message);
+      const turn = appendAssistantTurn();
+      setStreaming(true);
+      const requestId = globalThis.crypto?.randomUUID?.() || `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      state.clientSeq += 1;
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+          body: JSON.stringify({
+            user_id: state.userId,
+            session_id: state.sessionId,
+            request_id: requestId,
+            client_seq: state.clientSeq,
+            message
+          })
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `HTTP ${response.status}`);
+        }
+        await consumeSSE(response, (type, payload) => handleEvent(turn, type, payload));
+        if (!turn.finished) finishTurn(turn, false);
+      } catch (error) {
+        turn.bubble.textContent = turn.bubble.textContent || '网络请求失败，请稍后重试。';
+        turn.metaText.textContent = error.message;
+        finishTurn(turn, true);
+      } finally {
+        setStreaming(false);
+        await loadSessions();
+        $('messageInput').focus();
+      }
+    }
+
+    async function consumeSSE(response, onEvent) {
+      if (!response.body) throw new Error('浏览器不支持流式响应');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() || '';
+        frames.forEach(frame => {
+          let event = 'message';
+          const data = [];
+          frame.split('\n').forEach(line => {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            if (line.startsWith('data:')) data.push(line.slice(5).trim());
+          });
+          if (!data.length) return;
+          try { onEvent(event, JSON.parse(data.join('\n'))); }
+          catch (error) { console.error('invalid SSE payload', error); }
+        });
+        if (done) break;
+      }
+    }
+
+    function handleEvent(turn, type, payload) {
+      if (type === 'accepted') {
+        turn.traceId = payload.trace_id || '';
+        turn.metaText.textContent = '请求已接收';
+      } else if (type === 'progress') {
+        turn.metaText.textContent = payload.text || '处理中';
+      } else if (type === 'result') {
+        renderTurnResponse(turn, payload.response || {});
+        if (payload.trace_id) turn.traceId = payload.trace_id;
+      } else if (type === 'error') {
+        turn.bubble.textContent = payload.message || '处理失败，请重试。';
+        turn.metaText.textContent = payload.code || 'error';
+        finishTurn(turn, true);
+      } else if (type === 'done') {
+        finishTurn(turn, false);
+      }
+    }
+
+    function renderTurnResponse(turn, response) {
+      turn.bubble.textContent = response.message || '这轮没有返回内容。';
+      turn.extra.replaceChildren();
+      if (response.pending?.options?.length) {
+        const actions = document.createElement('div');
+        actions.className = 'quick-actions';
+        response.pending.options.forEach(option => {
+          const button = document.createElement('button');
+          button.className = 'quick-action';
+          button.textContent = `${option.index}. ${option.label}`;
+          button.onclick = () => sendMessage(String(option.index));
+          actions.appendChild(button);
+        });
+        turn.extra.appendChild(actions);
+      }
+      if (response.vehicles?.length) {
+        turn.extra.appendChild(renderVehicles(response.vehicles));
+      }
+      state.latestState = response.state || state.latestState;
+      renderState(state.latestState);
+      scrollBottom();
+    }
+
+    function renderVehicles(vehicles) {
+      const grid = document.createElement('div');
+      grid.className = 'vehicle-grid';
+      vehicles.forEach(vehicle => {
+        const card = document.createElement('article');
+        card.className = 'vehicle-card';
+
+        const top = document.createElement('div');
+        top.className = 'vehicle-top';
+        const title = document.createElement('div');
+        const index = document.createElement('div');
+        index.className = 'vehicle-index';
+        index.textContent = `OPTION ${vehicle.index}`;
+        const name = document.createElement('div');
+        name.className = 'vehicle-name';
+        name.textContent = vehicle.name || '车辆';
+        title.append(index, name);
+        const supplier = document.createElement('div');
+        supplier.className = 'vehicle-supplier';
+        supplier.textContent = vehicle.supplier || '';
+        top.append(title, supplier);
+        card.appendChild(top);
+
+        const tags = document.createElement('div');
+        tags.className = 'vehicle-tags';
+        [vehicle.brand, vehicle.seats ? `${vehicle.seats} 座` : ''].filter(Boolean).forEach(value => {
+          const tag = document.createElement('span');
+          tag.className = 'vehicle-tag';
+          tag.textContent = value;
+          tags.appendChild(tag);
+        });
+        if (tags.childElementCount) card.appendChild(tags);
+
+        if (vehicle.total_amount != null) {
+          const price = document.createElement('div');
+          price.className = 'vehicle-price';
+          price.textContent = `总金额 ¥${formatAmount(vehicle.total_amount)}`;
+          card.appendChild(price);
+        }
+        grid.appendChild(card);
+      });
+      return grid;
+    }
+
+    function appendMessage(role, content) {
+      const message = document.createElement('div');
+      message.className = `message ${role}`;
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = role === 'user' ? '你' : '租';
+      const body = document.createElement('div');
+      body.className = 'message-content';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = content;
+      body.appendChild(bubble);
+      message.append(avatar, body);
+      $('messages').appendChild(message);
+      scrollBottom();
+      return { message, body, bubble };
+    }
+
+    function appendAssistantTurn() {
+      const item = appendMessage('assistant', '');
+      const typing = document.createElement('span');
+      typing.className = 'typing';
+      typing.innerHTML = '<i></i><i></i><i></i>';
+      item.bubble.appendChild(typing);
+      const extra = document.createElement('div');
+      const meta = document.createElement('div');
+      meta.className = 'turn-meta processing';
+      const dot = document.createElement('span');
+      dot.className = 'status-dot';
+      const text = document.createElement('span');
+      text.textContent = '正在连接后端';
+      meta.append(dot, text);
+      item.body.append(extra, meta);
+      return { ...item, typing, extra, meta, metaText: text, finished: false, traceId: '' };
+    }
+
+    function finishTurn(turn, failed) {
+      if (turn.finished) return;
+      turn.finished = true;
+      if (turn.typing?.isConnected) turn.typing.remove();
+      turn.meta.className = `turn-meta${failed ? ' error' : ''}`;
+      turn.metaText.textContent = `${failed ? '本轮中断' : '本轮完成'} · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}${turn.traceId ? ` · trace ${turn.traceId.slice(0, 8)}` : ''}`;
+    }
+
+    function renderState(value) {
+      const panel = $('statePanel');
+      panel.replaceChildren();
+      panel.appendChild(stateSection('取还车地点', value?.location ? `${value.location.name}${value.location.address ? `\n${value.location.address}` : ''}` : '待补充'));
+      panel.appendChild(stateSection('取车时间', value?.pickup_time ? formatDate(value.pickup_time) : '待补充'));
+      panel.appendChild(stateSection('还车时间', value?.return_time ? formatDate(value.return_time) : '待补充'));
+
+      const requirements = document.createElement('section');
+      requirements.className = 'state-section';
+      requirements.innerHTML = '<div class="state-label">车辆诉求</div>';
+      const list = document.createElement('div');
+      list.className = 'requirement-list';
+      (value?.requirements || []).forEach(requirement => {
+        const chip = document.createElement('span');
+        chip.className = 'requirement-chip';
+        chip.textContent = requirement.raw_text || `${requirement.type}: ${requirement.value}`;
+        list.appendChild(chip);
+      });
+      if (!list.childElementCount) {
+        const empty = document.createElement('div');
+        empty.className = 'state-value state-empty';
+        empty.textContent = '暂无';
+        list.appendChild(empty);
+      }
+      requirements.appendChild(list);
+      panel.appendChild(requirements);
+
+      if (value?.pending) {
+        const pending = stateSection('等待确认', value.pending.question);
+        pending.classList.add('pending-card');
+        panel.appendChild(pending);
+      }
+      const count = stateSection('最近结果', '');
+      const countValue = count.querySelector('.state-value');
+      countValue.className = 'state-value result-count';
+      countValue.textContent = String(value?.result_count || 0);
+      count.appendChild(document.createTextNode(''));
+      panel.appendChild(count);
+    }
+
+    function stateSection(label, text) {
+      const section = document.createElement('section');
+      section.className = 'state-section';
+      const title = document.createElement('div');
+      title.className = 'state-label';
+      title.textContent = label;
+      const value = document.createElement('div');
+      value.className = `state-value${text === '待补充' ? ' state-empty' : ''}`;
+      value.textContent = text;
+      section.append(title, value);
+      return section;
+    }
+
+    function welcomeMarkup() {
+      return `<div class="welcome"><div class="welcome-inner"><div class="welcome-icon">🚙</div><h2>从行程开始，我来帮你找车</h2><p>可以一次告诉我地点、取还时间和车辆要求，也可以分几轮慢慢补充。</p><div class="suggestions"><button class="suggestion" onclick="useSuggestion('明天下午在首都机场取车，后天下午还车')">设置行程</button><button class="suggestion" onclick="useSuggestion('想要一辆 7 座 SUV')">添加车辆诉求</button><button class="suggestion" onclick="useSuggestion('都行，直接帮我搜')">直接搜索</button></div></div></div>`;
+    }
+
+    function useSuggestion(text) {
+      $('messageInput').value = text;
+      autoResize.call($('messageInput'));
+      $('messageInput').focus();
+    }
+
+    function removeWelcome() {
+      $('messages').querySelector('.welcome')?.remove();
+    }
+
+    function setStreaming(value) {
+      state.streaming = value;
+      $('sendButton').disabled = value;
+      $('messageInput').disabled = value;
+    }
+
+    function autoResize() {
+      this.style.height = 'auto';
+      this.style.height = `${Math.min(this.scrollHeight, 130)}px`;
+    }
+
+    function scrollBottom() {
+      const messages = $('messages');
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function showToast(message) {
+      alert(message || '操作失败');
+    }
+
+    function compactSessionId(value) {
+      return value ? `会话 ${value.slice(0, 8)}` : '新会话';
+    }
+
+    function formatDate(value) {
+      return new Date(value).toLocaleString('zh-CN', { hour12: false });
+    }
+
+    function formatAmount(value) {
+      return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+    }
+
+    function relativeTime(value) {
+      if (!value) return '';
+      const difference = Date.now() - new Date(value).getTime();
+      if (difference < 60000) return '刚刚';
+      if (difference < 3600000) return `${Math.floor(difference / 60000)} 分钟前`;
+      if (difference < 86400000) return `${Math.floor(difference / 3600000)} 小时前`;
+      return new Date(value).toLocaleDateString('zh-CN');
+    }
+
+    init();
+  </script>
+</body>
+</html>
