@@ -15,6 +15,7 @@ import (
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/api/llm"
 	"github.com/zxq97/agent/api/maps"
+	"github.com/zxq97/agent/internal/capability"
 	"github.com/zxq97/agent/internal/config"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
@@ -67,7 +68,10 @@ func main() {
 	exitOn(err, "create rental context handler")
 	requirementHandler, err := vehiclerequirement.NewHandler(requirementExtractor, vehiclecatalog.NewDefaultCatalog())
 	exitOn(err, "create vehicle requirement handler")
-	searchHandler, err := searchcar.NewSearchCarHandler(guideClient, searchplan.NewCompiler(), time.Now)
+	capabilityMatcher, err := capability.NewLLMMatcher(llmClient)
+	exitOn(err, "create capability matcher")
+	capabilityResolver := capability.NewResolver(capability.NewDefaultCatalog(), capabilityMatcher)
+	searchHandler, err := searchcar.NewSearchCarHandler(guideClient, searchplan.NewCompiler(), time.Now, capabilityResolver)
 	exitOn(err, "create search car handler")
 	intentRouter, err := router.NewLLMRouter(llmClient)
 	exitOn(err, "create intent router")

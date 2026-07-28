@@ -54,14 +54,23 @@ func NewModifyRentalContextHandler(extractor CommandExtractor, mapsClient maps.C
 	return &ModifyRentalContextHandler{extractor: extractor, maps: mapsClient, ids: ids, now: now, timezone: timezone, ambiguity: ambiguity}, nil
 }
 
-func (h *ModifyRentalContextHandler) Handle(ctx context.Context, s *session.AgentSession, input *ModifyRentalContextInput) (*ModifyRentalContextResult, error) {
+func (h *ModifyRentalContextHandler) Handle(ctx context.Context, s *session.AgentSession, input *ModifyRentalContextInput) (result *ModifyRentalContextResult, err error) {
 	if s == nil {
 		return nil, ErrSessionNil
 	}
 	if input == nil {
 		return nil, ErrInputNil
 	}
-	now := h.now()
+	now := input.ReceivedAt
+	if now.IsZero() {
+		now = h.now()
+	}
+	s = session.Clone(s)
+	defer func() {
+		if err == nil && result != nil {
+			result.Deltas = []session.StateDelta{session.RentalDeltaFrom(s, now)}
+		}
+	}()
 	s.Pending.Expire(now)
 	cmd := input.Command
 	var ambiguous []AmbiguousField
@@ -69,7 +78,7 @@ func (h *ModifyRentalContextHandler) Handle(ctx context.Context, s *session.Agen
 		if h.extractor == nil {
 			return nil, errors.New("modify rental context: extractor is required for source text")
 		}
-		extracted, err := h.extractor.Extract(ctx, h.buildExtractionInput(s, input.SourceText))
+		extracted, err := h.extractor.Extract(ctx, h.buildExtractionInput(s, input.SourceText, now))
 		if err != nil {
 			return nil, err
 		}
@@ -120,8 +129,8 @@ func (h *ModifyRentalContextHandler) Handle(ctx context.Context, s *session.Agen
 			}
 			// Keep independent, resolved time changes even though the location
 			// still needs the user to choose one of the map candidates.
-			modified := apply(s, cmd, nil, now)
-			result, err := h.createLocationPending(s, cmd, candidates)
+			modified := apply(s, cmd, nil)
+			result, err := h.createLocationPending(s, cmd, candidates, now)
 			if result != nil {
 				result.ModifiedFields = modified
 			}
@@ -141,14 +150,14 @@ func (h *ModifyRentalContextHandler) Handle(ctx context.Context, s *session.Agen
 	}
 	// Apply every field that is already resolved. Ambiguous fields are handled
 	// separately below and therefore do not discard these independent changes.
-	modified := apply(s, cmd, resolved, now)
+	modified := apply(s, cmd, resolved)
 	// If the resolved time answers the currently active time clarification,
 	// associate this command with that Pending so it can be completed below.
 	associateTimePending(s.Pending.Active, cmd)
 	if len(ambiguous) > 0 {
 		// Present or defer only the first unresolved time field. PendingStore
 		// enforces that the Session has at most one active user question.
-		result, err := h.createTimePending(s, cmd, ambiguous[0])
+		result, err := h.createTimePending(s, cmd, ambiguous[0], now)
 		if result != nil {
 			result.ModifiedFields = modified
 		}
@@ -247,8 +256,8 @@ func associateTimePending(active *session.PendingInteraction, cmd *ModifyRentalC
 	}
 }
 
-func (h *ModifyRentalContextHandler) buildExtractionInput(s *session.AgentSession, text string) *ExtractionInput {
-	in := &ExtractionInput{SourceText: text, Now: h.now(), Timezone: h.timezone.String(), CurrentState: CurrentRentalContext{PickupTime: s.Search.PickupTime, ReturnTime: s.Search.ReturnTime}}
+func (h *ModifyRentalContextHandler) buildExtractionInput(s *session.AgentSession, text string, now time.Time) *ExtractionInput {
+	in := &ExtractionInput{SourceText: text, Now: now, Timezone: h.timezone.String(), CurrentState: CurrentRentalContext{PickupTime: s.Search.PickupTime, ReturnTime: s.Search.ReturnTime}}
 	if s.Search.Location != nil {
 		in.CurrentState.LocationName = s.Search.Location.Name
 	}
@@ -257,7 +266,7 @@ func (h *ModifyRentalContextHandler) buildExtractionInput(s *session.AgentSessio
 	}
 	return in
 }
-func (h *ModifyRentalContextHandler) createLocationPending(s *session.AgentSession, cmd *ModifyRentalContextCommand, candidates []maps.Candidate) (*ModifyRentalContextResult, error) {
+func (h *ModifyRentalContextHandler) createLocationPending(s *session.AgentSession, cmd *ModifyRentalContextCommand, candidates []maps.Candidate, now time.Time) (*ModifyRentalContextResult, error) {
 	if h.ids == nil {
 		return nil, errors.New("modify rental context: interaction id generator is required")
 	}
@@ -269,7 +278,6 @@ func (h *ModifyRentalContextHandler) createLocationPending(s *session.AgentSessi
 		location := locationRefFromCandidate(&c)
 		options = append(options, session.PendingOption{ID: c.ID, Label: c.Name, Value: c.Address, Location: location})
 	}
-	now := h.now()
 	p := &session.PendingInteraction{ID: h.ids.NewID(), Type: session.PendingSelectLocation, Status: session.PendingActive, Question: "找到多个相关地点，请确认具体地点。", Options: options, WorkflowName: string(session.ActionModifyRentalContext), Priority: 100, CreatedAt: now, ExpireAt: now.Add(h.ambiguity.PendingTTL), BaseVersion: s.Version, DependencyFingerprint: rentalFingerprint(s.Search), BlockingActions: []session.PendingAction{session.ActionExecuteVehicleSearch}, Context: session.PendingContext{LocationQuery: cmd.LocationQuery}}
 	activated := s.Pending.Offer(p, &session.DeferredAction{ID: p.ID, Action: session.ActionModifyRentalContext, WorkflowName: p.WorkflowName, Reason: "location requires revalidation", EvidenceText: cmd.LocationQuery, BaseVersion: s.Version, DependencyFingerprint: p.DependencyFingerprint, CreatedAt: now})
 	if !activated {
@@ -277,11 +285,10 @@ func (h *ModifyRentalContextHandler) createLocationPending(s *session.AgentSessi
 	}
 	return &ModifyRentalContextResult{Status: ResultWaitingUser, InteractionID: p.ID, LocationOptions: candidates, Message: p.Question}, nil
 }
-func (h *ModifyRentalContextHandler) createTimePending(s *session.AgentSession, cmd *ModifyRentalContextCommand, field AmbiguousField) (*ModifyRentalContextResult, error) {
+func (h *ModifyRentalContextHandler) createTimePending(s *session.AgentSession, cmd *ModifyRentalContextCommand, field AmbiguousField, now time.Time) (*ModifyRentalContextResult, error) {
 	if h.ids == nil {
 		return nil, errors.New("modify rental context: interaction id generator is required")
 	}
-	now := h.now()
 	typ := session.PendingClarifyPickupTime
 	if field.Field == "return_time" {
 		typ = session.PendingClarifyReturnTime
@@ -350,31 +357,22 @@ func validateTimes(p preview, now time.Time) error {
 	}
 	return nil
 }
-func apply(s *session.AgentSession, cmd *ModifyRentalContextCommand, loc *maps.Candidate, now time.Time) []ModifiedField {
+func apply(s *session.AgentSession, cmd *ModifyRentalContextCommand, loc *maps.Candidate) []ModifiedField {
 	var out []ModifiedField
 	if loc != nil {
 		v := &session.LocationRef{ID: loc.ID, Name: loc.Name, Address: loc.Address, CityID: strconv.Itoa(loc.CityID), Latitude: loc.Latitude, Longitude: loc.Longitude}
 		if s.Search.Location == nil || s.Search.Location.ID != v.ID {
-			s.StateChanges = append(s.StateChanges, session.StateChange{Field: "location", OldValue: s.Search.Location, NewValue: v, Operation: "replace", CreatedAt: now})
 			s.Search.Location = v
 			out = append(out, ModifiedLocation)
 		}
 	}
 	if cmd.PickupTime != nil && (s.Search.PickupTime == nil || !s.Search.PickupTime.Equal(*cmd.PickupTime)) {
-		s.StateChanges = append(s.StateChanges, session.StateChange{Field: "pickup_time", OldValue: s.Search.PickupTime, NewValue: cmd.PickupTime, Operation: "replace", CreatedAt: now})
 		s.Search.PickupTime = cmd.PickupTime
 		out = append(out, ModifiedPickupTime)
 	}
 	if cmd.ReturnTime != nil && (s.Search.ReturnTime == nil || !s.Search.ReturnTime.Equal(*cmd.ReturnTime)) {
-		s.StateChanges = append(s.StateChanges, session.StateChange{Field: "return_time", OldValue: s.Search.ReturnTime, NewValue: cmd.ReturnTime, Operation: "replace", CreatedAt: now})
 		s.Search.ReturnTime = cmd.ReturnTime
 		out = append(out, ModifiedReturnTime)
-	}
-	if len(out) > 0 {
-		// A search snapshot is bound to the exact rental fingerprint. Keep the
-		// unfiltered Baseline for its normal fingerprint check, but never expose
-		// old pagination as active after a location/time change.
-		s.Search.ActiveSearch = nil
 	}
 	return out
 }

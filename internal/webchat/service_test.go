@@ -2,9 +2,11 @@ package webchat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
 	"github.com/zxq97/agent/internal/domain/searchcar"
@@ -19,8 +21,30 @@ type staticIntentRouter struct {
 	result *router.RouteResult
 }
 
+type failingIntentRouter struct{}
+
+func (failingIntentRouter) Route(context.Context, *router.Input) (*router.RouteResult, error) {
+	return nil, errors.New("router unavailable")
+}
+
 func (r staticIntentRouter) Route(context.Context, *router.Input) (*router.RouteResult, error) {
 	return r.result, nil
+}
+
+type controlledSaveStore struct {
+	Store
+	failures int
+	err      error
+	saves    int
+}
+
+func (s *controlledSaveStore) Save(ctx context.Context, value *SessionEnvelope, expectedVersion int64) error {
+	s.saves++
+	if s.failures > 0 {
+		s.failures--
+		return s.err
+	}
+	return s.Store.Save(ctx, value, expectedVersion)
 }
 
 type mismatchRentalHandler struct{}
@@ -35,6 +59,12 @@ func (staticGeneralReplyHandler) Handle(_ context.Context, _ *session.AgentSessi
 	return &generalreply.Result{Message: "通用回复：" + input.SourceText}, nil
 }
 
+type failingGeneralReplyHandler struct{}
+
+func (failingGeneralReplyHandler) Handle(context.Context, *session.AgentSession, *generalreply.Input) (*generalreply.Result, error) {
+	return nil, errors.New("general reply unavailable")
+}
+
 func TestServiceChatIsIdempotentAndRestoresClientSequence(t *testing.T) {
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })
@@ -43,7 +73,7 @@ func TestServiceChatIsIdempotentAndRestoresClientSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := service.CreateSession("user")
+	detail, err := service.CreateSession(context.Background(), "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +91,10 @@ func TestServiceChatIsIdempotentAndRestoresClientSequence(t *testing.T) {
 	if !replayed || second.Message != first.Message {
 		t.Fatalf("second=%#v replayed=%v", second, replayed)
 	}
-	loaded, err := service.GetSession("user", detail.SessionID)
+	if _, _, err := service.Chat(context.Background(), "user", detail.SessionID, "request-1", 1, "不同内容"); err != ErrRequestIdentityConflict {
+		t.Fatalf("request identity error=%v", err)
+	}
+	loaded, err := service.GetSession(context.Background(), "user", detail.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +120,7 @@ func TestServiceRequiresRequestIdentityAndSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := service.CreateSession("user")
+	detail, err := service.CreateSession(context.Background(), "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +146,7 @@ func TestServiceExecutesGeneralReplyAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := service.CreateSession("user")
+	detail, err := service.CreateSession(context.Background(), "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,15 +177,25 @@ func (h recordingSearchHandler) Handle(context.Context, *session.AgentSession, *
 	return &searchcar.SearchCarResult{Status: searchcar.ResultNeedsContext}, nil
 }
 
+type failingSearchHandler struct{}
+
+func (failingSearchHandler) Handle(context.Context, *session.AgentSession, *searchcar.SearchCarInput) (*searchcar.SearchCarResult, error) {
+	return nil, errors.New("search failed")
+}
+
 type recordingRequirementHandler struct {
 	calls *[]string
 }
 
 func (h recordingRequirementHandler) Handle(_ context.Context, agentSession *session.AgentSession, _ *vehiclerequirement.UpdateInput) (*vehiclerequirement.UpdateResult, error) {
 	*h.calls = append(*h.calls, "requirement")
-	agentSession.Search.Requirements = []session.SearchRequirementStateItem{{ID: "seat", Facet: "seat_num", CanonicalValue: "7", Operator: "eq", Importance: "hard", Status: "active"}}
-	agentSession.Search.RequirementVersion++
-	return &vehiclerequirement.UpdateResult{Changed: true, Requirements: agentSession.Search.Requirements}, nil
+	requirements := []session.SearchRequirementStateItem{{ID: "seat", Facet: "seat_num", CanonicalValue: "7", Operator: "eq", Importance: "hard", Status: "active"}}
+	return &vehiclerequirement.UpdateResult{
+		Changed: true, Requirements: requirements,
+		Deltas: []session.StateDelta{&session.RequirementDelta{
+			Requirements: requirements, IncrementVersion: true, ActivateGoal: true,
+		}},
+	}, nil
 }
 
 func TestServiceRoutesOnlySelectedDomainsInSerialOrder(t *testing.T) {
@@ -198,7 +241,7 @@ func TestServiceRoutesOnlySelectedDomainsInSerialOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			detail, err := service.CreateSession("user")
+			detail, err := service.CreateSession(context.Background(), "user")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -217,14 +260,213 @@ func TestServiceRoutesOnlySelectedDomainsInSerialOrder(t *testing.T) {
 	}
 }
 
+func TestServiceCommitsConfirmedRequirementWhenSearchFails(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	store := NewMemoryStore(func() time.Time { return now })
+	var calls []string
+	service, err := NewService(
+		orchestrator.New(
+			nil,
+			recordingRequirementHandler{calls: &calls},
+			failingSearchHandler{},
+			searchpolicy.New(1, func() time.Time { return now }),
+			func() time.Time { return now },
+		),
+		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
+			Action: router.ActionUpdateVehicleRequirements, EvidenceText: "想要7座", Confidence: 1,
+		}}}},
+		store,
+		func() time.Time { return now },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := service.CreateSession(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, replayed, err := service.Chat(context.Background(), "user", detail.SessionID, "failed-turn", 1, "想要7座")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed || response == nil || !strings.Contains(response.Message, "搜车服务暂时不可用") {
+		t.Fatalf("response=%#v replayed=%v", response, replayed)
+	}
+	loaded, err := service.GetSession(context.Background(), "user", detail.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ClientSeq != 1 || len(loaded.History) != 2 || len(loaded.State.Requirements) != 1 {
+		t.Fatalf("confirmed requirement was not committed: %#v", loaded)
+	}
+}
+
 func TestMemoryStoreListsNewestSessionFirst(t *testing.T) {
 	current := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return current })
-	first := store.Create("user")
+	first, err := store.Create(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
 	current = current.Add(time.Minute)
-	second := store.Create("user")
-	list := store.List("user")
-	if len(list) != 2 || list[0].SessionID != second.sessionID || list[1].SessionID != first.sessionID {
+	second, err := store.Create(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.List(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].SessionID != second.SessionID || list[1].SessionID != first.SessionID {
 		t.Fatalf("list=%#v", list)
+	}
+}
+
+func TestMemoryStoreSaveUsesExpectedVersion(t *testing.T) {
+	store := NewMemoryStore(time.Now)
+	created, err := store.Create(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := cloneEnvelope(created)
+	first.State.Version = 1
+	if err := store.Save(context.Background(), first, 0); err != nil {
+		t.Fatal(err)
+	}
+	stale := cloneEnvelope(created)
+	stale.State.Version = 1
+	if err := store.Save(context.Background(), stale, 0); err != ErrVersionConflict {
+		t.Fatalf("error=%v", err)
+	}
+	loaded, err := store.Load(context.Background(), "user", created.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Version != 1 {
+		t.Fatalf("version=%d", loaded.State.Version)
+	}
+}
+
+func TestServiceDoesNotExposeDraftWhenStoreSaveFails(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	base := NewMemoryStore(func() time.Time { return now })
+	store := &controlledSaveStore{Store: base, failures: 1, err: errors.New("store unavailable")}
+	service, err := NewService(
+		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
+		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
+			Action: router.ActionGeneralReply, EvidenceText: "你好", Confidence: 1,
+		}}}},
+		store,
+		func() time.Time { return now },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := service.CreateSession(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.Chat(context.Background(), "user", detail.SessionID, "request", 1, "你好"); err == nil {
+		t.Fatal("expected save failure")
+	}
+	loaded, err := base.Load(context.Background(), "user", detail.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Version != 0 || loaded.LatestSeq != 0 || len(loaded.History) != 0 || len(loaded.Completed) != 0 {
+		t.Fatalf("uncommitted draft leaked into store: %#v", loaded)
+	}
+}
+
+func TestServiceReplansOnceAfterVersionConflict(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	base := NewMemoryStore(func() time.Time { return now })
+	store := &controlledSaveStore{Store: base, failures: 1, err: ErrVersionConflict}
+	service, err := NewService(
+		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
+		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
+			Action: router.ActionGeneralReply, EvidenceText: "你好", Confidence: 1,
+		}}}},
+		store,
+		func() time.Time { return now },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := service.CreateSession(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, replayed, err := service.Chat(context.Background(), "user", detail.SessionID, "request", 1, "你好"); err != nil || replayed {
+		t.Fatalf("chat err=%v replayed=%v", err, replayed)
+	}
+	if store.saves != 2 {
+		t.Fatalf("save attempts=%d want=2", store.saves)
+	}
+	loaded, err := base.Load(context.Background(), "user", detail.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Version != 1 || loaded.LatestSeq != 1 || len(loaded.History) != 2 || len(loaded.Completed) != 1 {
+		t.Fatalf("unexpected committed state: %#v", loaded)
+	}
+}
+
+func TestServiceRouterFailureDoesNotCommitTurn(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	store := NewMemoryStore(func() time.Time { return now })
+	service, err := NewService(
+		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now),
+		failingIntentRouter{}, store, func() time.Time { return now },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := service.CreateSession(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.Chat(context.Background(), "user", detail.SessionID, "request", 1, "你好"); err == nil {
+		t.Fatal("expected router failure")
+	}
+	loaded, err := store.Load(context.Background(), "user", detail.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Version != 0 || loaded.LatestSeq != 0 || len(loaded.History) != 0 || len(loaded.Completed) != 0 {
+		t.Fatalf("router failure committed a turn: %#v", loaded)
+	}
+}
+
+func TestServiceGeneralReplyFailureUsesDeterministicFallback(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	store := NewMemoryStore(func() time.Time { return now })
+	service, err := NewService(
+		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, failingGeneralReplyHandler{}),
+		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
+			Action: router.ActionGeneralReply, EvidenceText: "解释一下", Confidence: 1,
+		}}}},
+		store, func() time.Time { return now },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := service.CreateSession(context.Background(), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _, err := service.Chat(context.Background(), "user", detail.SessionID, "request", 1, "解释一下")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(response.Message, "暂时无法回答") {
+		t.Fatalf("missing deterministic fallback: %#v", response)
+	}
+	loaded, err := store.Load(context.Background(), "user", detail.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Version != 1 || loaded.LatestSeq != 1 || len(loaded.History) != 2 || len(loaded.Completed) != 1 {
+		t.Fatalf("fallback turn was not atomically committed: %#v", loaded)
 	}
 }

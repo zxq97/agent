@@ -8,7 +8,9 @@ import (
 	"github.com/zxq97/agent/internal/domain/searchcar"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/orchestrator"
+	"github.com/zxq97/agent/internal/planner"
 	"github.com/zxq97/agent/internal/router"
+	"github.com/zxq97/agent/internal/turnnormalizer"
 )
 
 const maxGeneralReplyHistory = 6
@@ -26,22 +28,40 @@ func buildTurnRequest(sourceText string, history []Message, routes *router.Route
 	if routes == nil {
 		return request
 	}
+	var candidates []planner.Candidate
 	for _, candidate := range routes.Candidates {
 		switch candidate.Action {
 		case router.ActionModifyRentalContext:
-			request.RentalContext = &rentalcontext.ModifyRentalContextInput{SourceText: candidate.EvidenceText}
+			candidates = append(candidates, planner.Candidate{Type: planner.ActionModifyRentalContext, EvidenceText: candidate.EvidenceText})
 		case router.ActionUpdateVehicleRequirements:
-			request.VehicleRequirement = &vehiclerequirement.UpdateInput{SourceText: candidate.EvidenceText}
+			candidates = append(candidates, planner.Candidate{Type: planner.ActionUpdateVehicleRequirements, EvidenceText: candidate.EvidenceText})
 		case router.ActionRequestVehicleSearch:
-			request.SearchRequest = &searchcar.SearchCarInput{
-				Operation:    searchcar.ParseOperation(candidate.EvidenceText),
-				EvidenceText: candidate.EvidenceText,
-			}
+			candidates = append(candidates, planner.Candidate{Type: planner.ActionExecuteVehicleSearch, EvidenceText: candidate.EvidenceText})
 		case router.ActionGeneralReply:
-			request.GeneralReply.SourceText = appendUniqueReplyText(request.GeneralReply.SourceText, candidate.EvidenceText)
+			candidates = append(candidates, planner.Candidate{Type: planner.ActionGeneralReply, EvidenceText: candidate.EvidenceText})
 		}
 	}
-	request.GeneralReply.SourceText = appendUniqueReplyText(request.GeneralReply.SourceText, routes.UnassignedText)
+	if strings.TrimSpace(routes.UnassignedText) != "" {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionGeneralReply, EvidenceText: routes.UnassignedText})
+	}
+	request.Plan = planner.New().Build(candidates)
+	if action := request.Plan.Action(planner.ActionModifyRentalContext); action != nil {
+		request.RentalContext = &rentalcontext.ModifyRentalContextInput{SourceText: action.EvidenceText}
+	}
+	if action := request.Plan.Action(planner.ActionUpdateVehicleRequirements); action != nil {
+		request.VehicleRequirement = &vehiclerequirement.UpdateInput{SourceText: action.EvidenceText}
+	}
+	if action := request.Plan.Action(planner.ActionExecuteVehicleSearch); action != nil {
+		signals := turnnormalizer.NormalizeSearch(action.EvidenceText)
+		request.SearchRequest = &searchcar.SearchCarInput{
+			Operation:            searchcar.SearchOperation(signals.Operation),
+			EvidenceText:         action.EvidenceText,
+			NoPreferenceExplicit: signals.NoPreference,
+		}
+	}
+	if action := request.Plan.Action(planner.ActionGeneralReply); action != nil {
+		request.GeneralReply.SourceText = action.EvidenceText
+	}
 	return request
 }
 

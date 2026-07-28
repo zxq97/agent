@@ -43,20 +43,54 @@ func matchesAll(value guide.VehRate, filters []QuoteFilter) bool {
 }
 
 func matches(value guide.VehRate, filter QuoteFilter) bool {
-	if value.Vehicle == nil {
-		return false
-	}
 	switch filter.Facet {
 	case "seat_num":
+		if value.Vehicle == nil {
+			return false
+		}
 		target, err := strconv.Atoi(filter.Value)
 		if err != nil {
 			return false
 		}
 		return compareNumber(value.Vehicle.Seats, target, filter.Operator)
 	case "brand":
+		if value.Vehicle == nil {
+			return false
+		}
 		return compareText(value.Vehicle.BrandName, filter.Value, filter.Operator, false)
 	case "vehicle_series", "vehicle_model":
+		if value.Vehicle == nil {
+			return false
+		}
 		return compareText(value.Vehicle.VehicleName, filter.Value, filter.Operator, true)
+	case "price_total":
+		if value.TotalCharge == nil {
+			return false
+		}
+		target, err := strconv.ParseFloat(filter.Value, 64)
+		if err != nil {
+			return false
+		}
+		return compareFloat(value.TotalCharge.TotalAmount, target, filter.Operator)
+	default:
+		return false
+	}
+}
+
+func compareFloat(actual, target float64, operator string) bool {
+	switch operator {
+	case "eq":
+		return actual == target
+	case "not_eq":
+		return actual != target
+	case "gt":
+		return actual > target
+	case "gte":
+		return actual >= target
+	case "lt":
+		return actual < target
+	case "lte":
+		return actual <= target
 	default:
 		return false
 	}

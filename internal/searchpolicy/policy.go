@@ -1,7 +1,6 @@
 package searchpolicy
 
 import (
-	"strings"
 	"time"
 
 	"github.com/zxq97/agent/internal/domain/searchcar"
@@ -19,18 +18,20 @@ const (
 
 type Input struct {
 	ExplicitSearchRequested bool
-	SearchEvidence          string
+	NoPreferenceExplicit    bool
 	RequestedOperation      searchcar.SearchOperation
 
 	RentalContextChanged bool
 	RequirementsChanged  bool
 	HadPreviousSearch    bool
+	ReceivedAt           time.Time
 }
 
 type Result struct {
 	Decision  Decision
 	Operation searchcar.SearchOperation
 	Message   string
+	Deltas    []session.StateDelta
 }
 
 type Policy struct {
@@ -54,18 +55,22 @@ func (p *Policy) Evaluate(agentSession *session.AgentSession, input Input) Resul
 	}
 	operation := input.RequestedOperation
 	if operation == "" {
-		operation = searchcar.ParseOperation(input.SearchEvidence)
+		operation = searchcar.OperationSearchNow
 	}
 	if input.RentalContextChanged || input.RequirementsChanged {
-		agentSession.Search.ActiveSearch = nil
 		operation = searchcar.OperationSearchNow
 	}
 	if agentSession.Pending.Blocks(session.ActionExecuteVehicleSearch) {
 		return Result{Decision: DecisionWaitPending}
 	}
 	if input.ExplicitSearchRequested {
-		if explicitlyNoPreference(input.SearchEvidence) && len(agentSession.Search.Requirements) == 0 {
-			agentSession.Search.Goal.NoPreference = true
+		if input.NoPreferenceExplicit && len(agentSession.Search.Requirements) == 0 {
+			noPreference := true
+			return Result{
+				Decision:  DecisionSearch,
+				Operation: operation,
+				Deltas:    []session.StateDelta{&session.SearchPolicyDelta{NoPreference: &noPreference}},
+			}
 		}
 		return Result{Decision: DecisionSearch, Operation: operation}
 	}
@@ -80,29 +85,30 @@ func (p *Policy) Evaluate(agentSession *session.AgentSession, input Input) Resul
 			return Result{Decision: DecisionSearch, Operation: searchcar.OperationSearchNow}
 		}
 		if agentSession.Search.Goal.PreferenceAskCount < p.maxPreferenceAsks {
-			agentSession.Search.Goal.PreferenceAskCount++
-			agentSession.Search.Goal.LastAskedAt = p.now()
+			now := input.ReceivedAt
+			if now.IsZero() {
+				now = p.now()
+			}
+			nextAskCount := agentSession.Search.Goal.PreferenceAskCount + 1
 			return Result{
 				Decision: DecisionAskPreference,
 				Message:  "对品牌、车型、座位数、能源类型或预算有要求吗？如果都可以，也可以直接告诉我开始搜索。",
+				Deltas: []session.StateDelta{&session.SearchPolicyDelta{
+					PreferenceAskCount: &nextAskCount,
+					LastAskedAt:        &now,
+				}},
 			}
 		}
-		agentSession.Search.Goal.NoPreference = true
-		return Result{Decision: DecisionSearch, Operation: searchcar.OperationSearchNow}
+		noPreference := true
+		return Result{
+			Decision:  DecisionSearch,
+			Operation: searchcar.OperationSearchNow,
+			Deltas:    []session.StateDelta{&session.SearchPolicyDelta{NoPreference: &noPreference}},
+		}
 	}
 	return Result{Decision: DecisionSkip}
 }
 
 func rentalContextComplete(state session.SearchState) bool {
 	return state.Location != nil && state.PickupTime != nil && state.ReturnTime != nil
-}
-
-func explicitlyNoPreference(text string) bool {
-	text = strings.TrimSpace(text)
-	for _, phrase := range []string{"都行", "都可以", "没要求", "没有要求", "不限", "随便", "看着办"} {
-		if strings.Contains(text, phrase) {
-			return true
-		}
-	}
-	return false
 }

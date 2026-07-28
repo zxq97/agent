@@ -7,6 +7,7 @@ import (
 
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/searchcar"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/searchpolicy"
 	"github.com/zxq97/agent/internal/session"
@@ -15,6 +16,30 @@ import (
 type staticID string
 
 func (id staticID) NewID() string { return string(id) }
+
+type successfulSearch struct {
+	calls int
+}
+
+type requirementDeltaHandler struct{}
+
+func (requirementDeltaHandler) Handle(context.Context, *session.AgentSession, *vehiclerequirement.UpdateInput) (*vehiclerequirement.UpdateResult, error) {
+	requirements := []session.SearchRequirementStateItem{{
+		ID: "seat", Facet: "seat_num", CanonicalValue: "7",
+		Operator: "eq", Importance: "hard", Status: "active",
+	}}
+	return &vehiclerequirement.UpdateResult{
+		Changed: true, Requirements: requirements,
+		Deltas: []session.StateDelta{&session.RequirementDelta{
+			Requirements: requirements, IncrementVersion: true, ActivateGoal: true,
+		}},
+	}, nil
+}
+
+func (h *successfulSearch) Handle(context.Context, *session.AgentSession, *searchcar.SearchCarInput) (*searchcar.SearchCarResult, error) {
+	h.calls++
+	return &searchcar.SearchCarResult{Status: searchcar.ResultNeedsContext}, nil
+}
 
 func TestExecuteResolvesPendingAndAppliesOtherCondition(t *testing.T) {
 	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
@@ -28,7 +53,8 @@ func TestExecuteResolvesPendingAndAppliesOtherCondition(t *testing.T) {
 		Options:         []session.PendingOption{{ID: "airport", Label: "虹桥机场", Location: &session.LocationRef{ID: "airport", Name: "虹桥机场", CityID: "310000", Latitude: 31.2, Longitude: 121.3}}},
 		BlockingActions: []session.PendingAction{session.ActionExecuteVehicleSearch}, CreatedAt: now, ExpireAt: now.Add(10 * time.Minute), MaxMissedUserTurns: 2,
 	}, DeferredActions: []session.DeferredAction{{ID: "budget", Action: session.ActionExecuteVehicleSearch, EvidenceText: "预算300", BlockedByPendingID: "choose-location"}}}}
-	orchestrator := New(handler, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now })
+	search := &successfulSearch{}
+	orchestrator := New(handler, nil, search, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now })
 	result, err := orchestrator.Execute(context.Background(), agentSession, &TurnRequest{
 		SourceText: "虹桥机场，改成后天下午",
 		RentalContext: &rentalcontext.ModifyRentalContextInput{Command: &rentalcontext.ModifyRentalContextCommand{
@@ -41,8 +67,44 @@ func TestExecuteResolvesPendingAndAppliesOtherCondition(t *testing.T) {
 	if agentSession.Pending.Active != nil || agentSession.Search.Location == nil || agentSession.Search.Location.ID != "airport" || agentSession.Search.PickupTime == nil || !agentSession.Search.PickupTime.Equal(pickup) {
 		t.Fatalf("session = %#v", agentSession)
 	}
-	if len(result.RentalContext) != 2 || len(result.RevalidateActions) != 1 || result.RevalidateActions[0].ID != "budget" {
+	if len(result.RentalContext) != 2 || len(result.RevalidateActions) != 0 ||
+		search.calls != 1 || len(agentSession.Pending.DeferredActions) != 0 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestExecuteKeepsRequirementAlongsidePendingAnswer(t *testing.T) {
+	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
+	handler, err := rentalcontext.NewModifyRentalContextHandler(nil, nil, staticID("next"), func() time.Time { return now }, time.UTC, rentalcontext.DefaultAmbiguityConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentSession := &session.AgentSession{Pending: session.PendingStore{Active: &session.PendingInteraction{
+		ID: "choose-location", Type: session.PendingSelectLocation, Status: session.PendingActive,
+		Options: []session.PendingOption{{
+			ID: "airport", Label: "虹桥机场",
+			Location: &session.LocationRef{ID: "airport", Name: "虹桥机场", CityID: "310000"},
+		}},
+		BlockingActions: []session.PendingAction{session.ActionExecuteVehicleSearch},
+		CreatedAt:       now, ExpireAt: now.Add(10 * time.Minute),
+	}}}
+	search := &successfulSearch{}
+	result, err := New(
+		handler, requirementDeltaHandler{}, search,
+		searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now },
+	).Execute(context.Background(), agentSession, &TurnRequest{
+		SourceText:         "虹桥机场，还要7座",
+		VehicleRequirement: &vehiclerequirement.UpdateInput{SourceText: "还要7座"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentSession.Pending.Active != nil ||
+		agentSession.Search.Location == nil || agentSession.Search.Location.ID != "airport" ||
+		len(agentSession.Search.Requirements) != 1 ||
+		agentSession.Search.Requirements[0].CanonicalValue != "7" ||
+		result.VehicleRequirement == nil || search.calls != 1 {
+		t.Fatalf("pending answer lost mixed intent: session=%#v result=%#v", agentSession, result)
 	}
 }
 
@@ -68,21 +130,14 @@ func TestExecuteReturnsDeferredActionsWhenPendingExpires(t *testing.T) {
 		Active:          &session.PendingInteraction{ID: "location", Type: session.PendingSelectLocation, Status: session.PendingActive, CreatedAt: now.Add(-time.Hour), ExpireAt: now.Add(-time.Minute)},
 		DeferredActions: []session.DeferredAction{{ID: "budget", Action: session.ActionExecuteVehicleSearch, BlockedByPendingID: "location"}},
 	}}
-	result, err := New(nil, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }).Execute(context.Background(), agentSession, &TurnRequest{SourceText: "继续"})
+	search := &successfulSearch{}
+	result, err := New(nil, nil, search, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }).Execute(context.Background(), agentSession, &TurnRequest{SourceText: "继续"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExpiredPending == nil || len(result.RevalidateActions) != 1 || result.RevalidateActions[0].ID != "budget" {
+	if result.ExpiredPending == nil || len(result.RevalidateActions) != 0 ||
+		search.calls != 1 || len(agentSession.Pending.DeferredActions) != 0 {
 		t.Fatalf("result = %#v", result)
-	}
-}
-
-func TestRemoveCancellationRequiresExplicitPrefix(t *testing.T) {
-	if residual, cancelled := removeCancellation("我不是要取消，只是问一下规则"); cancelled || residual == "" {
-		t.Fatalf("residual=%q cancelled=%v", residual, cancelled)
-	}
-	if residual, cancelled := removeCancellation("算了，改成杭州东站"); !cancelled || residual != "，改成杭州东站" {
-		t.Fatalf("residual=%q cancelled=%v", residual, cancelled)
 	}
 }
 
@@ -141,17 +196,5 @@ func TestExecuteSendsDomainMismatchTextToGeneralReply(t *testing.T) {
 	}
 	if general.source != "SUV和MPV有什么区别" || result.GeneralReply == nil || result.GeneralReply.Message == "" {
 		t.Fatalf("source=%q result=%#v", general.source, result)
-	}
-}
-
-func TestSelectPendingOptionReturnsResidualText(t *testing.T) {
-	options := []session.PendingOption{{ID: "airport", Label: "虹桥机场"}, {ID: "station", Label: "虹桥火车站"}}
-	option, residual := selectPendingOption(options, "虹桥机场，每天300")
-	if option == nil || option.ID != "airport" || residual != "，每天300" {
-		t.Fatalf("option=%#v residual=%q", option, residual)
-	}
-	option, residual = selectPendingOption(options, "第2个，改成明天")
-	if option == nil || option.ID != "station" || residual != "改成明天" {
-		t.Fatalf("ordinal option=%#v residual=%q", option, residual)
 	}
 }

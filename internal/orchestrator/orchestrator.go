@@ -2,8 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,11 +10,12 @@ import (
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
 	"github.com/zxq97/agent/internal/domain/searchcar"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
+	"github.com/zxq97/agent/internal/pendingresolver"
+	"github.com/zxq97/agent/internal/planner"
 	"github.com/zxq97/agent/internal/searchpolicy"
 	"github.com/zxq97/agent/internal/session"
+	"github.com/zxq97/agent/internal/turnnormalizer"
 )
-
-var ordinalOptionPattern = regexp.MustCompile(`^\s*(?:第|选)?([1-9])(?:个|项)?(?:[，,。\s]|$)`)
 
 type RentalContextHandler interface {
 	Handle(context.Context, *session.AgentSession, *rentalcontext.ModifyRentalContextInput) (*rentalcontext.ModifyRentalContextResult, error)
@@ -38,10 +37,23 @@ type SearchPolicy interface {
 	Evaluate(*session.AgentSession, searchpolicy.Input) searchpolicy.Result
 }
 
+type TurnContext struct {
+	RequestID   string
+	ClientSeq   int64
+	UserID      string
+	SessionID   string
+	SourceText  string
+	ReceivedAt  time.Time
+	BaseVersion int64
+}
+
 // TurnRequest contains Router-approved domain evidence. Requirement updates and
 // explicit search requests are separate so one can run without the other.
 type TurnRequest struct {
+	Context    TurnContext
 	SourceText string
+	ReceivedAt time.Time
+	Plan       planner.ActionPlan
 
 	RentalContext      *rentalcontext.ModifyRentalContextInput
 	VehicleRequirement *vehiclerequirement.UpdateInput
@@ -59,6 +71,13 @@ type TurnResult struct {
 	RevalidateActions []session.DeferredAction
 	ExpiredPending    *session.PendingInteraction
 	SuspendedPending  *session.PendingInteraction
+	FailedActions     []FailedAction
+}
+
+type FailedAction struct {
+	Action     string
+	ReasonCode string
+	Cause      error
 }
 
 // Orchestrator executes the Router-selected domains serially, then asks the
@@ -68,6 +87,9 @@ type Orchestrator struct {
 	requirement VehicleRequirementHandler
 	search      SearchCarHandler
 	policy      SearchPolicy
+	reducer     *session.Reducer
+	pending     *pendingresolver.Resolver
+	planner     *planner.Planner
 	now         func() time.Time
 	general     GeneralReplyHandler
 }
@@ -90,7 +112,17 @@ func New(
 	if len(general) > 0 {
 		generalHandler = general[0]
 	}
-	return &Orchestrator{rental: rental, requirement: requirement, search: search, policy: policy, now: now, general: generalHandler}
+	return &Orchestrator{
+		rental:      rental,
+		requirement: requirement,
+		search:      search,
+		policy:      policy,
+		reducer:     session.NewReducer(),
+		pending:     pendingresolver.New(),
+		planner:     planner.New(),
+		now:         now,
+		general:     generalHandler,
+	}
 }
 
 func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentSession, request *TurnRequest) (*TurnResult, error) {
@@ -100,13 +132,32 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	if request == nil {
 		return nil, errors.New("orchestrator execute: request is required")
 	}
-	now := o.now()
+	requestCopy := *request
+	request = &requestCopy
+	if request.SourceText == "" {
+		request.SourceText = request.Context.SourceText
+	}
+	request.Plan = o.ensurePlan(request)
+	request.Plan.BindBaseVersion(request.Context.BaseVersion)
+	applyActionPlan(request)
+	now := request.Context.ReceivedAt
+	if now.IsZero() {
+		now = request.ReceivedAt
+	}
+	if now.IsZero() {
+		now = o.now()
+	}
 	startingPendingID := ""
 	if agentSession.Pending.Active != nil {
 		startingPendingID = agentSession.Pending.Active.ID
 	}
 	hadPreviousSearch := agentSession.Search.ActiveSearch != nil || len(agentSession.Search.LastResults) > 0
-	result := &TurnResult{ExpiredPending: agentSession.Pending.Expire(now)}
+	pendingState := session.ClonePendingStore(agentSession.Pending)
+	expiredPending := pendingState.Expire(now)
+	if err := o.reducer.Apply(agentSession, session.PendingDeltaFrom(pendingState)); err != nil {
+		return nil, err
+	}
+	result := &TurnResult{ExpiredPending: expiredPending}
 	addressed := result.ExpiredPending != nil
 
 	residual := request.SourceText
@@ -115,34 +166,61 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	searchRan := false
 	rentalChanged := false
 	requirementsChanged := false
+	searchBlockedByFailure := false
 	var fallbackTexts []string
 
 	if active := agentSession.Pending.Active; active != nil {
-		var cancelled bool
-		residual, cancelled = removeCancellation(residual)
-		if cancelled {
-			agentSession.Pending.Finish(session.PendingCancelled, now)
-			agentSession.Pending.RemoveDeferredByAction(session.ActionExecuteVehicleSearch)
+		resolution := o.pending.Resolve(active, residual)
+		residual = resolution.ResidualText
+		if resolution.Event == pendingresolver.EventCancelled {
+			pendingState := session.ClonePendingStore(agentSession.Pending)
+			pendingState.Finish(session.PendingCancelled, now)
+			pendingState.RemoveDeferredByAction(session.ActionExecuteVehicleSearch)
+			if err := o.reducer.Apply(agentSession, session.PendingDeltaFrom(pendingState)); err != nil {
+				return nil, err
+			}
 			addressed = true
 		} else if active.Type == session.PendingSelectLocation {
-			option, rest := selectPendingOption(active.Options, residual)
-			if option != nil {
+			if option := resolution.SelectedOption; option != nil {
 				if o.rental == nil {
 					return nil, errors.New("orchestrator execute: rental context handler is required to resolve location pending")
 				}
 				rentalResult, err := o.rental.Handle(ctx, agentSession, &rentalcontext.ModifyRentalContextInput{
-					Command: &rentalcontext.ModifyRentalContextCommand{LocationID: option.ID, InteractionID: active.ID},
+					Command:    &rentalcontext.ModifyRentalContextCommand{LocationID: option.ID, InteractionID: active.ID},
+					ReceivedAt: now,
 				})
 				if err != nil {
 					return nil, err
 				}
+				if err := o.reducer.Apply(agentSession, rentalResult.Deltas...); err != nil {
+					return nil, err
+				}
 				result.RentalContext = append(result.RentalContext, rentalResult)
-				residual = rest
 				rentalRan = true
 				rentalChanged = rentalResult.Status == rentalcontext.ResultSuccess && len(rentalResult.ModifiedFields) > 0
 				addressed = agentSession.Pending.Active == nil || agentSession.Pending.Active.ID != startingPendingID
 			}
 		}
+	}
+
+	if addressed && startingPendingID != "" {
+		deferred := deferredBlockedBy(agentSession.Pending.DeferredActions, startingPendingID)
+		var candidates []planner.Candidate
+		for _, action := range deferred {
+			actionType, ok := plannerAction(action.Action)
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, planner.Candidate{
+				Type:         actionType,
+				EvidenceText: action.EvidenceText,
+				SourceID:     action.ID,
+				BaseVersion:  action.BaseVersion,
+				BlockedBy:    action.BlockedByPendingID,
+			})
+		}
+		request.Plan = o.planner.Merge(request.Plan, candidates)
+		applyActionPlan(request)
 	}
 
 	if request.RentalContext != nil {
@@ -153,12 +231,16 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		if input.SourceText == "" || addressed {
 			input.SourceText = residual
 		}
+		input.ReceivedAt = now
 		if input.Command != nil || hasMeaningfulText(input.SourceText) {
 			rentalResult, err := o.rental.Handle(ctx, agentSession, &input)
 			if err != nil && !errors.Is(err, rentalcontext.ErrDomainMismatch) {
 				return nil, err
 			}
 			if err == nil {
+				if err := o.reducer.Apply(agentSession, rentalResult.Deltas...); err != nil {
+					return nil, err
+				}
 				result.RentalContext = append(result.RentalContext, rentalResult)
 				rentalRan = true
 				rentalChanged = rentalChanged || (rentalResult.Status == rentalcontext.ResultSuccess && len(rentalResult.ModifiedFields) > 0)
@@ -166,6 +248,28 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 				fallbackTexts = appendUniqueText(fallbackTexts, input.SourceText)
 			}
 		}
+	}
+
+	if startingPendingID != "" &&
+		(agentSession.Pending.Active == nil || agentSession.Pending.Active.ID != startingPendingID) {
+		addressed = true
+		deferred := deferredBlockedBy(agentSession.Pending.DeferredActions, startingPendingID)
+		var candidates []planner.Candidate
+		for _, action := range deferred {
+			actionType, ok := plannerAction(action.Action)
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, planner.Candidate{
+				Type:         actionType,
+				EvidenceText: action.EvidenceText,
+				SourceID:     action.ID,
+				BaseVersion:  action.BaseVersion,
+				BlockedBy:    action.BlockedByPendingID,
+			})
+		}
+		request.Plan = o.planner.Merge(request.Plan, candidates)
+		applyActionPlan(request)
 	}
 
 	// Requirement extraction is deliberately allowed to run even when a
@@ -180,9 +284,20 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		}
 		requirementResult, err := o.requirement.Handle(ctx, agentSession, &input)
 		if err != nil && !errors.Is(err, vehiclerequirement.ErrDomainMismatch) {
-			return nil, err
+			if !rentalChanged && !addressed {
+				return nil, err
+			}
+			result.FailedActions = append(result.FailedActions, FailedAction{
+				Action:     string(session.ActionUpdateVehicleRequirements),
+				ReasonCode: "requirement_extraction_failed",
+				Cause:      err,
+			})
+			searchBlockedByFailure = true
 		}
 		if err == nil {
+			if err := o.reducer.Apply(agentSession, requirementResult.Deltas...); err != nil {
+				return nil, err
+			}
 			result.VehicleRequirement = requirementResult
 			requirementRan = true
 			requirementsChanged = requirementResult.Changed
@@ -197,12 +312,19 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		RentalContextChanged:    rentalChanged,
 		RequirementsChanged:     requirementsChanged,
 		HadPreviousSearch:       hadPreviousSearch,
+		ReceivedAt:              now,
 	}
 	if request.SearchRequest != nil {
-		policyInput.SearchEvidence = request.SearchRequest.EvidenceText
+		policyInput.NoPreferenceExplicit = request.SearchRequest.NoPreferenceExplicit
 		policyInput.RequestedOperation = request.SearchRequest.Operation
 	}
-	decision := o.policy.Evaluate(agentSession, policyInput)
+	decision := searchpolicy.Result{Decision: searchpolicy.DecisionSkip}
+	if !searchBlockedByFailure {
+		decision = o.policy.Evaluate(agentSession, policyInput)
+		if err := o.reducer.Apply(agentSession, decision.Deltas...); err != nil {
+			return nil, err
+		}
+	}
 	switch decision.Decision {
 	case searchpolicy.DecisionAskPreference:
 		result.SearchCar = searchcar.NeedsRequirementResult(decision.Message)
@@ -210,13 +332,25 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		if o.search == nil {
 			return nil, errors.New("orchestrator execute: search car handler is required")
 		}
-		searchInput := &searchcar.SearchCarInput{Operation: decision.Operation}
+		searchInput := &searchcar.SearchCarInput{Operation: decision.Operation, ReceivedAt: now}
 		if request.SearchRequest != nil {
 			searchInput.EvidenceText = request.SearchRequest.EvidenceText
+			searchInput.NoPreferenceExplicit = request.SearchRequest.NoPreferenceExplicit
 			searchInput.PageSize = request.SearchRequest.PageSize
 		}
 		searchResult, err := o.search.Handle(ctx, agentSession, searchInput)
 		if err != nil {
+			if err := o.reducer.Apply(agentSession, &session.SearchDirtyDelta{Reason: "guide_error"}); err != nil {
+				return nil, err
+			}
+			result.FailedActions = append(result.FailedActions, FailedAction{
+				Action:     string(session.ActionExecuteVehicleSearch),
+				ReasonCode: "search_external_failure",
+				Cause:      err,
+			})
+			break
+		}
+		if err := o.reducer.Apply(agentSession, searchResult.Deltas...); err != nil {
 			return nil, err
 		}
 		result.SearchCar = searchResult
@@ -235,9 +369,15 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		}
 		generalResult, err := o.general.Handle(ctx, agentSession, input)
 		if err != nil {
-			return nil, err
+			result.FailedActions = append(result.FailedActions, FailedAction{
+				Action:     string(planner.ActionGeneralReply),
+				ReasonCode: "general_reply_failure",
+				Cause:      err,
+			})
+			result.GeneralReply = &generalreply.Result{Message: "这部分内容暂时无法回答，但已确认的租车条件会保留。"}
+		} else {
+			result.GeneralReply = generalResult
 		}
-		result.GeneralReply = generalResult
 	}
 
 	if startingPendingID != "" {
@@ -245,15 +385,23 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 			addressed = true
 		}
 		if addressed {
+			pendingState := session.ClonePendingStore(agentSession.Pending)
 			for _, deferred := range deferredBlockedBy(agentSession.Pending.DeferredActions, startingPendingID) {
 				if actionWasRevalidated(deferred.Action, rentalRan, requirementRan, searchRan) {
-					agentSession.Pending.RemoveDeferred(deferred.ID)
+					pendingState.RemoveDeferred(deferred.ID)
 					continue
 				}
 				result.RevalidateActions = append(result.RevalidateActions, deferred)
 			}
+			if err := o.reducer.Apply(agentSession, session.PendingDeltaFrom(pendingState)); err != nil {
+				return nil, err
+			}
 		} else {
-			result.SuspendedPending = agentSession.Pending.MarkNotAddressed(now)
+			pendingState := session.ClonePendingStore(agentSession.Pending)
+			result.SuspendedPending = pendingState.MarkNotAddressed(now)
+			if err := o.reducer.Apply(agentSession, session.PendingDeltaFrom(pendingState)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	result.ActivePending = agentSession.Pending.Active
@@ -273,6 +421,94 @@ func appendUniqueText(values []string, value string) []string {
 	return append(values, value)
 }
 
+func (o *Orchestrator) ensurePlan(request *TurnRequest) planner.ActionPlan {
+	if len(request.Plan.Actions) > 0 {
+		return request.Plan
+	}
+	var candidates []planner.Candidate
+	if request.RentalContext != nil {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionModifyRentalContext, EvidenceText: request.RentalContext.SourceText})
+	}
+	if request.VehicleRequirement != nil {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionUpdateVehicleRequirements, EvidenceText: request.VehicleRequirement.SourceText})
+	}
+	if request.SearchRequest != nil {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionExecuteVehicleSearch, EvidenceText: request.SearchRequest.EvidenceText})
+	}
+	if request.GeneralReply != nil && request.GeneralReply.SourceText != "" {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionGeneralReply, EvidenceText: request.GeneralReply.SourceText})
+	}
+	return o.planner.Build(candidates)
+}
+
+func applyActionPlan(request *TurnRequest) {
+	if request == nil {
+		return
+	}
+	if action := request.Plan.Action(planner.ActionModifyRentalContext); action != nil {
+		if request.RentalContext == nil {
+			request.RentalContext = &rentalcontext.ModifyRentalContextInput{}
+		}
+		input := *request.RentalContext
+		input.SourceText = appendEvidence(input.SourceText, action.EvidenceText)
+		request.RentalContext = &input
+	}
+	if action := request.Plan.Action(planner.ActionUpdateVehicleRequirements); action != nil {
+		if request.VehicleRequirement == nil {
+			request.VehicleRequirement = &vehiclerequirement.UpdateInput{}
+		}
+		input := *request.VehicleRequirement
+		input.SourceText = appendEvidence(input.SourceText, action.EvidenceText)
+		request.VehicleRequirement = &input
+	}
+	if action := request.Plan.Action(planner.ActionExecuteVehicleSearch); action != nil {
+		if request.SearchRequest == nil {
+			request.SearchRequest = &searchcar.SearchCarInput{}
+		}
+		input := *request.SearchRequest
+		input.EvidenceText = appendEvidence(input.EvidenceText, action.EvidenceText)
+		if input.Operation == "" {
+			signals := turnnormalizer.NormalizeSearch(input.EvidenceText)
+			input.Operation = searchcar.SearchOperation(signals.Operation)
+			input.NoPreferenceExplicit = signals.NoPreference
+		}
+		request.SearchRequest = &input
+	}
+	if action := request.Plan.Action(planner.ActionGeneralReply); action != nil {
+		if request.GeneralReply == nil {
+			request.GeneralReply = &generalreply.Input{}
+		}
+		input := *request.GeneralReply
+		input.SourceText = appendEvidence(input.SourceText, action.EvidenceText)
+		request.GeneralReply = &input
+	}
+}
+
+func appendEvidence(current, addition string) string {
+	current = strings.TrimSpace(current)
+	addition = strings.TrimSpace(addition)
+	if current == "" {
+		return addition
+	}
+	if addition == "" || current == addition || strings.Contains(current, addition) {
+		return current
+	}
+	return current + "\n" + addition
+}
+
+func plannerAction(action session.PendingAction) (planner.ActionType, bool) {
+	switch action {
+	case session.ActionModifyRentalContext:
+		return planner.ActionModifyRentalContext, true
+	case session.ActionUpdateVehicleRequirements:
+		return planner.ActionUpdateVehicleRequirements, true
+	case session.ActionExecuteVehicleSearch:
+		return planner.ActionExecuteVehicleSearch, true
+	default:
+		return "", false
+	}
+}
+
 func actionWasRevalidated(action session.PendingAction, rentalRan, requirementRan, searchRan bool) bool {
 	switch action {
 	case session.ActionModifyRentalContext:
@@ -284,48 +520,6 @@ func actionWasRevalidated(action session.PendingAction, rentalRan, requirementRa
 	default:
 		return false
 	}
-}
-
-func removeCancellation(text string) (string, bool) {
-	trimmed := strings.TrimSpace(text)
-	for _, phrase := range []string{"先不搜了", "不用了", "算了", "取消"} {
-		if strings.HasPrefix(trimmed, phrase) {
-			return strings.TrimSpace(trimmed[len(phrase):]), true
-		}
-	}
-	return text, false
-}
-
-func selectPendingOption(options []session.PendingOption, text string) (*session.PendingOption, string) {
-	if match := ordinalOptionPattern.FindStringSubmatchIndex(text); len(match) >= 4 {
-		value, err := strconv.Atoi(text[match[2]:match[3]])
-		if err == nil && value > 0 && value <= len(options) {
-			return &options[value-1], strings.TrimSpace(text[:match[0]] + text[match[1]:])
-		}
-	}
-	var selected *session.PendingOption
-	start, end := -1, -1
-	for index := range options {
-		for _, candidate := range []string{options[index].Label, options[index].Value} {
-			candidate = strings.TrimSpace(candidate)
-			if candidate == "" {
-				continue
-			}
-			matchIndex := strings.Index(strings.ToLower(text), strings.ToLower(candidate))
-			if matchIndex < 0 {
-				continue
-			}
-			if selected != nil && selected.ID != options[index].ID {
-				return nil, text
-			}
-			selected = &options[index]
-			start, end = matchIndex, matchIndex+len(candidate)
-		}
-	}
-	if selected == nil {
-		return nil, text
-	}
-	return selected, strings.TrimSpace(text[:start] + text[end:])
 }
 
 func hasMeaningfulText(text string) bool {

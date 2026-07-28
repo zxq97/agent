@@ -13,6 +13,7 @@ import (
 
 func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) TurnResponse {
 	var parts []string
+	var resolutions []RequirementResolutionView
 	for _, result := range turn.RentalContext {
 		if result == nil {
 			continue
@@ -32,6 +33,7 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 	vehicles := []VehicleView{}
 	if turn.SearchCar != nil {
 		result := turn.SearchCar
+		resolutions = requirementResolutionViews(result)
 		switch result.Status {
 		case searchcar.ResultNeedsContext:
 			parts = append(parts, "还需要补充"+missingFieldText(result.MissingFields)+"，才能开始搜车。")
@@ -59,6 +61,14 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 	if turn.GeneralReply != nil {
 		parts = append(parts, turn.GeneralReply.Message)
 	}
+	for _, failed := range turn.FailedActions {
+		switch failed.ReasonCode {
+		case "search_external_failure":
+			parts = append(parts, "已保留确认过的条件，但搜车服务暂时不可用，可以稍后直接重试搜索。")
+		case "requirement_extraction_failed":
+			parts = append(parts, "已保留其他确认过的条件，但这次车辆要求没有可靠识别，请换一种说法再试。")
+		}
+	}
 	pending := pendingView(state.Pending.Active)
 	if pending != nil {
 		parts = append(parts, pending.Question)
@@ -66,7 +76,67 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 	if len(parts) == 0 {
 		parts = append(parts, "我可以帮你修改取还车地点和时间，也可以按品牌、车型、座位、价格等条件搜车。")
 	}
-	return TurnResponse{Message: strings.Join(nonEmpty(parts), "\n"), Pending: pending, Vehicles: vehicles, State: stateView(state)}
+	return TurnResponse{
+		Message: strings.Join(nonEmpty(parts), "\n"), Pending: pending,
+		Vehicles: vehicles, RequirementResolutions: resolutions, State: stateView(state),
+	}
+}
+
+func requirementResolutionViews(result *searchcar.SearchCarResult) []RequirementResolutionView {
+	if result == nil {
+		return nil
+	}
+	byID := make(map[string]RequirementResolutionView)
+	order := make([]string, 0)
+	addLegacy := func(values []searchcar.RequirementResult, execution string) {
+		for _, value := range values {
+			view, exists := byID[value.ID]
+			if !exists {
+				order = append(order, value.ID)
+				view = RequirementResolutionView{ID: value.ID, RawText: value.RawText}
+			}
+			view.Status = value.Status
+			view.ReasonCode = value.ReasonCode
+			view.Reason = value.Reason
+			if execution != "" {
+				view.Executions = appendUniqueString(view.Executions, execution)
+			}
+			byID[value.ID] = view
+		}
+	}
+	addLegacy(result.AppliedRequirements, "remote_filter")
+	addLegacy(result.VerifiedRequirements, "local_filter")
+	addLegacy(result.RankedRequirements, "rank")
+	addLegacy(result.AdvisoryRequirements, "")
+	addLegacy(result.UnresolvedRequirements, "")
+	for _, value := range result.CapabilityResolutions {
+		view, exists := byID[value.RequirementID]
+		if !exists {
+			order = append(order, value.RequirementID)
+			view = RequirementResolutionView{ID: value.RequirementID, RawText: value.RawText}
+		}
+		view.Status = string(value.Status)
+		view.ReasonCode = value.ReasonCode
+		view.Reason = value.Reason
+		for _, execution := range value.Executions {
+			view.Executions = appendUniqueString(view.Executions, string(execution.Mode))
+		}
+		byID[value.RequirementID] = view
+	}
+	views := make([]RequirementResolutionView, 0, len(order))
+	for _, id := range order {
+		views = append(views, byID[id])
+	}
+	return views
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func rentalChangeText(fields []rentalcontext.ModifiedField) string {
@@ -103,14 +173,27 @@ func missingFieldText(fields []searchcar.SearchMissingField) string {
 }
 
 func stateView(state *session.AgentSession) StateView {
-	view := StateView{Requirements: []RequirementView{}, ResultCount: len(state.Search.LastResults)}
+	view := StateView{
+		Requirements:      []RequirementView{},
+		ResultCount:       len(state.Search.LastResults),
+		SearchDirtyReason: state.Search.DirtyReason,
+	}
 	if state.Search.Location != nil {
 		view.Location = &LocationView{Name: state.Search.Location.Name, Address: state.Search.Location.Address, CityID: state.Search.Location.CityID}
 	}
 	view.PickupTime = state.Search.PickupTime
 	view.ReturnTime = state.Search.ReturnTime
 	for _, requirement := range state.Search.Requirements {
-		view.Requirements = append(view.Requirements, RequirementView{Type: requirement.Facet, Value: requirement.CanonicalValue, RawText: requirement.RawText, Importance: requirement.Importance, Status: requirement.Status})
+		view.Requirements = append(view.Requirements, RequirementView{
+			Type:          requirement.DisplayType(),
+			Value:         requirement.DisplayValue(),
+			RawText:       requirement.RawText,
+			SemanticLabel: requirement.SemanticLabel,
+			Category:      string(requirement.Category),
+			CanonicalType: requirement.CanonicalType,
+			Importance:    requirement.Importance,
+			Status:        requirement.Status,
+		})
 	}
 	view.Pending = pendingView(state.Pending.Active)
 	return view

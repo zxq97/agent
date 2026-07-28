@@ -2,6 +2,7 @@ package searchcar
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 const searchCarConfigPath = "../../../conf/dev.yaml"
 
 func TestRemoteSearchUsesIsolatedBaselineAndContinuation(t *testing.T) {
+	requireRemoteGuide(t)
 	cfg, err := config.Load(searchCarConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +33,9 @@ func TestRemoteSearchUsesIsolatedBaselineAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := session.NewReducer().Apply(agentSession, first.Deltas...); err != nil {
+		t.Fatal(err)
+	}
 	if agentSession.Search.Baseline == nil || agentSession.Search.Baseline.ContextID == "" || len(agentSession.Search.Baseline.Menu) == 0 {
 		t.Fatalf("missing baseline: %#v", agentSession.Search.Baseline)
 	}
@@ -40,6 +45,9 @@ func TestRemoteSearchUsesIsolatedBaselineAndContinuation(t *testing.T) {
 	if first.Status == ResultSuccess || first.Status == ResultPartial {
 		next, err := handler.Handle(ctx, agentSession, &SearchCarInput{Operation: OperationNextBatch, PageSize: 10})
 		if err != nil {
+			t.Fatal(err)
+		}
+		if err := session.NewReducer().Apply(agentSession, next.Deltas...); err != nil {
 			t.Fatal(err)
 		}
 		if next.RequestPage < first.RequestPage && next.Status != ResultNoResults {
@@ -52,6 +60,7 @@ func TestRemoteSearchUsesIsolatedBaselineAndContinuation(t *testing.T) {
 }
 
 func TestRemoteSearchCompilesSeatFromBaselineMenu(t *testing.T) {
+	requireRemoteGuide(t)
 	cfg, err := config.Load(searchCarConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -67,13 +76,27 @@ func TestRemoteSearchCompilesSeatFromBaselineMenu(t *testing.T) {
 		ID: "seat:7", Facet: "seat_num", RawText: "7座", RawValue: "7", CanonicalValue: "7",
 		Operator: "eq", Importance: "hard", Status: "active",
 	}}
-	result, err := handler.Handle(log.WithTraceID(context.Background(), "remote-search-seat"), agentSession, &SearchCarInput{Operation: OperationSearchNow, PageSize: 10})
+	ctx := log.WithTraceID(context.Background(), "remote-search-seat")
+	result, err := handler.Handle(ctx, agentSession, &SearchCarInput{Operation: OperationSearchNow, PageSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agentSession.Search.ActiveSearch == nil || len(agentSession.Search.ActiveSearch.Plan.FilterCodes()) != 1 ||
-		agentSession.Search.ActiveSearch.Plan.FilterCodes()[0] != "filter/seat_num/7" {
+	if err := session.NewReducer().Apply(agentSession, result.Deltas...); err != nil {
+		t.Fatal(err)
+	}
+	if agentSession.Search.ActiveSearch == nil {
+		t.Fatalf("missing active search: result=%#v", result)
+	}
+	executionPlan := handler.compileExecutionPlan(ctx, agentSession, agentSession.Search.Baseline)
+	if len(executionPlan.FilterPlan.FilterCodes()) != 1 || executionPlan.FilterPlan.FilterCodes()[0] != "filter/seat_num/7" {
 		t.Fatalf("unexpected compiled plan: result=%#v snapshot=%#v", result, agentSession.Search.ActiveSearch)
+	}
+}
+
+func requireRemoteGuide(t *testing.T) {
+	t.Helper()
+	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
+		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real Guide integration tests")
 	}
 }
 

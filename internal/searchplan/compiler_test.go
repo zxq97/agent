@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/internal/requirement"
 )
 
 func TestCompilerUsesFacetCodePrefixes(t *testing.T) {
@@ -15,6 +16,28 @@ func TestCompilerUsesFacetCodePrefixes(t *testing.T) {
 	codes := plan.FilterCodes()
 	if len(codes) != 2 || codes[0] != "filter/seat_num/7" || codes[1] != "filter/fuel/electric" {
 		t.Fatalf("unexpected plan: %#v", plan)
+	}
+}
+
+func TestCompilerUsesTotalPriceFieldWhenMenuCannotExpressBudget(t *testing.T) {
+	amount := 450.0
+	plan := NewCompiler().Compile([]Requirement{{
+		ID: "budget", Facet: "price_preference", RawText: "总价450元以内",
+		CanonicalValue: "total<=450CNY", Operator: "lte", Importance: "hard", Status: "active",
+		Value: requirement.Value{Kind: requirement.ValueNumber, Number: &amount, Unit: "total_CNY"},
+	}}, baselineMenu())
+	if len(plan.QuoteFilters) != 1 ||
+		plan.QuoteFilters[0].Facet != "price_total" ||
+		plan.Resolutions[0].Capability != CapabilityVerifiable {
+		t.Fatalf("unexpected price plan: %#v", plan)
+	}
+	quotes := []guide.VehRate{
+		{TotalCharge: &guide.TotalCharge{TotalAmount: 400}},
+		{TotalCharge: &guide.TotalCharge{TotalAmount: 500}},
+	}
+	filtered := ApplyQuoteFilters(quotes, plan.QuoteFilters)
+	if len(filtered) != 1 || filtered[0].TotalCharge.TotalAmount != 400 {
+		t.Fatalf("unexpected filtered quotes: %#v", filtered)
 	}
 }
 

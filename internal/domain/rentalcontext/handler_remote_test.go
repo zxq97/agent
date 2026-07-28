@@ -2,6 +2,7 @@ package rentalcontext
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 const rentalContextTestConfigPath = "../../../conf/dev.yaml"
 
 func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
+	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
+		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real LLM and Maps integration tests")
+	}
 	cfg, err := config.Load(rentalContextTestConfigPath)
 	if err != nil {
 		t.Fatal(err)

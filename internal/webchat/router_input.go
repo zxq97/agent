@@ -26,8 +26,8 @@ func buildRouterInput(state *session.AgentSession, history []Message, sourceText
 	input.CurrentRental.ReturnTime = formatRouterTime(state.Search.ReturnTime)
 	for _, requirement := range state.Search.Requirements {
 		input.CurrentRequirements = append(input.CurrentRequirements, router.RequirementView{
-			Type:       requirement.Facet,
-			Value:      requirement.CanonicalValue,
+			Type:       requirement.DisplayType(),
+			Value:      requirement.DisplayValue(),
 			Importance: requirement.Importance,
 			Status:     requirement.Status,
 		})

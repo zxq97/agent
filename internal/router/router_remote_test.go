@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,9 @@ import (
 const routerTestConfigPath = "../../conf/dev.yaml"
 
 func TestLLMRouterWithRemoteService(t *testing.T) {
+	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
+		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real LLM integration tests")
+	}
 	cfg, err := config.Load(routerTestConfigPath)
 	if err != nil {
 		t.Fatal(err)

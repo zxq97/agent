@@ -3,8 +3,8 @@ package session
 import (
 	"time"
 
-	"github.com/zxq97/agent/api/guide"
-	"github.com/zxq97/agent/internal/searchplan"
+	"github.com/zxq97/agent/internal/requirement"
+	"github.com/zxq97/agent/internal/searchruntime"
 )
 
 type LocationRef struct {
@@ -38,6 +38,7 @@ type SearchState struct {
 	ReturnTime *time.Time
 
 	Goal               SearchGoalState
+	DirtyReason        string
 	RequirementVersion int64
 	Requirements       []SearchRequirementStateItem
 
@@ -53,6 +54,10 @@ type SearchRequirementStateItem struct {
 	RawText        string
 	RawValue       string
 	CanonicalValue string
+	SemanticLabel  string
+	Category       requirement.Category
+	CanonicalType  string
+	Value          requirement.Value
 
 	Operator   string
 	Importance string
@@ -67,11 +72,34 @@ type SearchRequirementStateItem struct {
 	CatalogVersion   string
 }
 
+func (r SearchRequirementStateItem) DisplayType() string {
+	if r.CanonicalType != "" {
+		return r.CanonicalType
+	}
+	if r.Facet != "" {
+		return r.Facet
+	}
+	if r.SemanticLabel != "" {
+		return r.SemanticLabel
+	}
+	return string(r.Category)
+}
+
+func (r SearchRequirementStateItem) DisplayValue() string {
+	if r.CanonicalValue != "" {
+		return r.CanonicalValue
+	}
+	if r.RawValue != "" {
+		return r.RawValue
+	}
+	return r.RawText
+}
+
 type GuideBaselineCache struct {
 	RentalFingerprint string
 	ContextID         string
-	Menu              []guide.MenuGroup
-	BaseQuotes        []guide.VehRate
+	Menu              []searchruntime.MenuGroup
+	BaseQuotes        []searchruntime.Quote
 
 	FirstReceivedAt  time.Time
 	ServiceExpiresAt time.Time
@@ -94,10 +122,11 @@ type ActiveSearchSnapshot struct {
 	RentalFingerprint  string
 	RequirementVersion int64
 	FilterPlanHash     string
+	CapabilityVersion  string
+	RuntimeFingerprint string
 
 	BaselineContextID     string
 	ContinuationContextID string
-	Plan                  searchplan.FilterPlan
 
 	CurrentPage int
 	PageSize    int
@@ -115,7 +144,7 @@ type ActiveSearchSnapshot struct {
 type SearchResultBatch struct {
 	BatchNumber int
 	RequestPage int
-	Vehicles    []guide.VehRate
+	Vehicles    []searchruntime.Quote
 	CreatedAt   time.Time
 }
 

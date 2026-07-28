@@ -1,5 +1,7 @@
 package searchplan
 
+import "github.com/zxq97/agent/internal/requirement"
+
 type Capability string
 
 const (
@@ -28,6 +30,10 @@ type Requirement struct {
 	EntityBrandID    string
 	EntityParentID   string
 	EntityResolution string
+
+	SemanticLabel string
+	Category      requirement.Category
+	Value         requirement.Value
 }
 
 type MenuFilter struct {
@@ -78,7 +84,9 @@ type FilterPlan struct {
 	RankFactors  []RankFactor
 	Resolutions  []Resolution
 
-	PlanHash string
+	CapabilityVersion  string
+	RuntimeFingerprint string
+	PlanHash           string
 }
 
 func (p FilterPlan) FilterCodes() []string {

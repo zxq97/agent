@@ -308,7 +308,48 @@ func compilePrice(plan *FilterPlan, requirement Requirement, index menuIndex) {
 			return
 		}
 	}
+	if requirement.Importance == "hard" && addTotalPriceFilters(plan, requirement) {
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "quote_filter", "使用 Guide 返回的订单总价验证当前候选集"))
+		return
+	}
 	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "price_range_not_supported", "当前菜单无法无损表达该预算范围"))
+}
+
+func addTotalPriceFilters(plan *FilterPlan, value Requirement) bool {
+	unit := strings.ToLower(strings.TrimSpace(value.Value.Unit))
+	if unit != "" && unit != "cny" && unit != "total_cny" {
+		return false
+	}
+	switch value.Value.Kind {
+	case "number":
+		if value.Value.Number == nil || !isNumericOperator(value.Operator) {
+			return false
+		}
+		plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{
+			RequirementID: value.ID, Facet: "price_total", Operator: value.Operator,
+			Value: strconv.FormatFloat(*value.Value.Number, 'f', -1, 64),
+		})
+		return true
+	case "range":
+		if value.Value.Range == nil {
+			return false
+		}
+		if value.Value.Range.Min != nil {
+			plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{
+				RequirementID: value.ID, Facet: "price_total", Operator: "gte",
+				Value: strconv.FormatFloat(*value.Value.Range.Min, 'f', -1, 64),
+			})
+		}
+		if value.Value.Range.Max != nil {
+			plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{
+				RequirementID: value.ID, Facet: "price_total", Operator: "lte",
+				Value: strconv.FormatFloat(*value.Value.Range.Max, 'f', -1, 64),
+			})
+		}
+		return value.Value.Range.Min != nil || value.Value.Range.Max != nil
+	default:
+		return false
+	}
 }
 
 func compileVehicleEntity(plan *FilterPlan, requirement Requirement) {

@@ -37,3 +37,17 @@ go run ./cmd/http \
 会话保存在当前进程内存中，服务重启后会清空，适合本地开发联调。
 
 当前实现使用首版静态车辆别名目录；正式环境应替换为权威、可版本化的车辆目录。Guide 多筛选项 AND/OR 和 Context 续期等未确认契约不会由客户端猜测。
+
+## 测试
+
+本地纯逻辑和应用测试不依赖外部服务：
+
+```bash
+go test ./...
+```
+
+Guide、Maps 和 LLM 契约测试仍读取 `conf/dev.yaml` 并调用真实服务，需要在能访问相应网络的环境显式开启：
+
+```bash
+RUN_REMOTE_INTEGRATION=1 go test ./...
+```

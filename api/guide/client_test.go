@@ -2,6 +2,7 @@ package guide
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 const devConfigPath = "../../conf/dev.yaml"
 
 func TestRemoteSearchQuotes(t *testing.T) {
+	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
+		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real Guide integration tests")
+	}
 	cfg, err := config.Load(devConfigPath)
 	if err != nil {
 		t.Fatal(err)

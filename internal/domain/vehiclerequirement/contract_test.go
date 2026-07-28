@@ -4,15 +4,35 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/zxq97/agent/internal/requirement"
 )
 
 func TestDecodeExtractResult(t *testing.T) {
-	content := `{"requirements":[{"facet":"vehicle_model","raw_text":"特斯拉 Model Y","raw_value":"Model Y","operation":"replace","operator":"eq","importance":"hard","confidence":0.99,"entity_context":{"brand_hint":"特斯拉","series_hint":""}},{"facet":"seat_num","raw_text":"最好7座","raw_value":"7","operation":"replace","operator":"eq","importance":"soft","confidence":0.95,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
+	content := `{"requirements":[{"raw_text":"特斯拉 Model Y","semantic_label":"","category":"vehicle","canonical_type":"vehicle_model","value":{"kind":"text","text":"Model Y","unit":""},"operation":"replace","operator":"eq","importance":"hard","confidence":0.99,"entity_context":{"brand_hint":"特斯拉","series_hint":""}},{"raw_text":"最好7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"number","number":7,"unit":"seat"},"operation":"replace","operator":"eq","importance":"soft","confidence":0.95,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
 	result, err := decodeExtractResult(content)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Requirements) != 2 || result.Requirements[0].Facet != FacetVehicleModel {
+	if len(result.Requirements) != 2 ||
+		result.Requirements[0].CanonicalType != FacetVehicleModel ||
+		result.Requirements[0].RawValue != "Model Y" ||
+		result.Requirements[1].Value.Kind != requirement.ValueNumber ||
+		result.Requirements[1].RawValue != "7" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestDecodeExtractResultPreservesOpenSemanticRequirement(t *testing.T) {
+	content := `{"requirements":[{"raw_text":"适合带老人出行","semantic_label":"elderly_friendly","category":"usage_scenario","canonical_type":null,"value":null,"operation":"add","operator":"eq","importance":"soft","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
+	result, err := decodeExtractResult(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Requirements) != 1 ||
+		result.Requirements[0].CanonicalType != "" ||
+		result.Requirements[0].SemanticLabel != "elderly_friendly" ||
+		result.Requirements[0].Category != requirement.CategoryUsageScenario {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -23,8 +43,8 @@ func TestDecodeExtractResultRejectsSearchWithoutRequirements(t *testing.T) {
 	}
 }
 
-func TestDecodeExtractResultAllowsRemoveFacet(t *testing.T) {
-	result, err := decodeExtractResult(`{"requirements":[{"facet":"brand","raw_text":"品牌不限","raw_value":"","operation":"remove","operator":"eq","importance":"hard","confidence":1,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`)
+func TestDecodeExtractResultAllowsRemoveCanonicalType(t *testing.T) {
+	result, err := decodeExtractResult(`{"requirements":[{"raw_text":"品牌不限","semantic_label":"","category":"vehicle","canonical_type":"brand","value":null,"operation":"remove","operator":"eq","importance":"hard","confidence":1,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,13 +56,13 @@ func TestDecodeExtractResultAllowsRemoveFacet(t *testing.T) {
 func TestDecodeExtractResultRejectsInvalidContract(t *testing.T) {
 	tests := []string{
 		`{"requirements":[]}`,
-		`{"requirements":[{"brand":"特斯拉","raw_text":"特斯拉","raw_value":"特斯拉","operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"facet":"brand","raw_text":"特斯拉","raw_value":"特斯拉","operation":"add","operator":"eq","importance":"hard","entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"facet":"model","raw_text":"Model Y","raw_value":"Model Y","operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"facet":"brand","raw_text":"特斯拉","raw_value":"特斯拉","operation":"merge","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"facet":"brand","raw_text":"特斯拉","raw_value":"特斯拉","operation":"add","operator":"eq","importance":"hard","confidence":1.1,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"facet":"brand","raw_text":"特斯拉","raw_value":"特斯拉","operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":false}`,
-		`{"requirements":[{"id":"llm-id","facet":"brand","raw_text":"特斯拉","raw_value":"特斯拉","operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"unknown_type","value":{"kind":"text","text":"特斯拉"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"适合老人","semantic_label":"","category":"usage_scenario","canonical_type":null,"value":null,"operation":"add","operator":"eq","importance":"soft","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"number","text":"7"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"text","text":"7"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"price","canonical_type":"brand","value":{"kind":"text","text":"特斯拉"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"brand","value":{"kind":"entity","text":"brand:tesla"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"id":"llm-id","raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"brand","value":{"kind":"text","text":"特斯拉"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
 	}
 	for _, content := range tests {
 		if _, err := decodeExtractResult(content); err == nil {
@@ -51,16 +71,17 @@ func TestDecodeExtractResultRejectsInvalidContract(t *testing.T) {
 	}
 }
 
-func TestExtractionInputContainsOnlyRequirementContext(t *testing.T) {
+func TestExtractionInputContainsOpenRequirementContext(t *testing.T) {
 	input := ExtractionInput{
 		SourceText: "改成Model Y",
 		CurrentRequirements: []RequirementView{{
-			Facet:          "brand",
-			RawValue:       "丰田",
-			CanonicalValue: "丰田",
-			Operator:       "eq",
-			Importance:     "hard",
-			Status:         "active",
+			RawText:       "适合老人",
+			SemanticLabel: "elderly_friendly",
+			Category:      requirement.CategoryUsageScenario,
+			Value:         requirement.Value{Kind: requirement.ValueNone},
+			Operator:      "eq",
+			Importance:    "soft",
+			Status:        "unresolved",
 		}},
 		RecentDomainHistory: []string{"想看丰田"},
 	}
@@ -69,7 +90,7 @@ func TestExtractionInputContainsOnlyRequirementContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	value := string(data)
-	for _, key := range []string{`"source_text"`, `"current_requirements"`, `"recent_domain_history"`, `"facet"`, `"raw_value"`, `"canonical_value"`, `"operator"`, `"importance"`, `"status"`} {
+	for _, key := range []string{`"source_text"`, `"current_requirements"`, `"recent_domain_history"`, `"raw_text"`, `"semantic_label"`, `"category"`, `"canonical_type"`, `"value"`, `"operator"`, `"importance"`, `"status"`} {
 		if !strings.Contains(value, key) {
 			t.Fatalf("missing key %s in %s", key, value)
 		}

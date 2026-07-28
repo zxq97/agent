@@ -3,6 +3,7 @@ package vehiclerequirement
 import (
 	"context"
 
+	"github.com/zxq97/agent/internal/requirement"
 	"github.com/zxq97/agent/internal/session"
 )
 
@@ -57,15 +58,40 @@ type EntityContext struct {
 }
 
 type Requirement struct {
-	Facet         Facet         `json:"facet"`
-	RawText       string        `json:"raw_text"`
-	RawValue      string        `json:"raw_value"`
-	Operation     Operation     `json:"operation"`
-	Operator      Operator      `json:"operator"`
-	Importance    Importance    `json:"importance"`
-	Confidence    float64       `json:"confidence"`
-	EntityContext EntityContext `json:"entity_context"`
+	RawText       string               `json:"raw_text"`
+	SemanticLabel string               `json:"semantic_label"`
+	Category      requirement.Category `json:"category"`
+	CanonicalType Facet                `json:"canonical_type,omitempty"`
+	Value         requirement.Value    `json:"value"`
+	Operation     Operation            `json:"operation"`
+	Operator      Operator             `json:"operator"`
+	Importance    Importance           `json:"importance"`
+	Confidence    float64              `json:"confidence"`
+	EntityContext EntityContext        `json:"entity_context"`
+
+	// Facet and RawValue are transitional internal mirrors used by the current
+	// normalizer/compiler while they migrate to CanonicalType and typed Value.
+	Facet    Facet  `json:"-"`
+	RawValue string `json:"-"`
 }
+
+type RequirementCategory = requirement.Category
+type RequirementValue = requirement.Value
+type RequirementValueKind = requirement.ValueKind
+
+const (
+	RequirementCategoryVehicle       = requirement.CategoryVehicle
+	RequirementCategoryPrice         = requirement.CategoryPrice
+	RequirementCategoryConfiguration = requirement.CategoryConfiguration
+	RequirementCategoryPreference    = requirement.CategoryPreference
+	RequirementCategoryUsageScenario = requirement.CategoryUsageScenario
+	RequirementCategoryUnknown       = requirement.CategoryUnknown
+
+	RequirementValueNone   = requirement.ValueNone
+	RequirementValueText   = requirement.ValueText
+	RequirementValueNumber = requirement.ValueNumber
+	RequirementValueRange  = requirement.ValueRange
+)
 
 type ExtractResult struct {
 	Requirements  []Requirement `json:"requirements"`
@@ -73,12 +99,14 @@ type ExtractResult struct {
 }
 
 type RequirementView struct {
-	Facet          string `json:"facet"`
-	RawValue       string `json:"raw_value"`
-	CanonicalValue string `json:"canonical_value"`
-	Operator       string `json:"operator"`
-	Importance     string `json:"importance"`
-	Status         string `json:"status"`
+	RawText       string               `json:"raw_text"`
+	SemanticLabel string               `json:"semantic_label"`
+	Category      requirement.Category `json:"category"`
+	CanonicalType string               `json:"canonical_type"`
+	Value         requirement.Value    `json:"value"`
+	Operator      string               `json:"operator"`
+	Importance    string               `json:"importance"`
+	Status        string               `json:"status"`
 }
 
 type ExtractionInput struct {
@@ -98,4 +126,5 @@ type UpdateInput struct {
 type UpdateResult struct {
 	Changed      bool
 	Requirements []session.SearchRequirementStateItem
+	Deltas       []session.StateDelta
 }

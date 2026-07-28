@@ -93,7 +93,7 @@ func buildPromptInput(agentSession *session.AgentSession, input *Input) promptIn
 	}
 	for _, requirement := range agentSession.Search.Requirements {
 		result.Session.Requirements = append(result.Session.Requirements, promptRequirementView{
-			Facet: requirement.Facet, Value: requirement.CanonicalValue,
+			Facet: requirement.DisplayType(), Value: requirement.DisplayValue(),
 			Important: requirement.Importance, Status: requirement.Status,
 		})
 	}

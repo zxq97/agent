@@ -24,12 +24,13 @@ type SessionDetail struct {
 }
 
 type StateView struct {
-	Location     *LocationView     `json:"location,omitempty"`
-	PickupTime   *time.Time        `json:"pickup_time,omitempty"`
-	ReturnTime   *time.Time        `json:"return_time,omitempty"`
-	Requirements []RequirementView `json:"requirements"`
-	Pending      *PendingView      `json:"pending,omitempty"`
-	ResultCount  int               `json:"result_count"`
+	Location          *LocationView     `json:"location,omitempty"`
+	PickupTime        *time.Time        `json:"pickup_time,omitempty"`
+	ReturnTime        *time.Time        `json:"return_time,omitempty"`
+	Requirements      []RequirementView `json:"requirements"`
+	Pending           *PendingView      `json:"pending,omitempty"`
+	ResultCount       int               `json:"result_count"`
+	SearchDirtyReason string            `json:"search_dirty_reason,omitempty"`
 }
 
 type LocationView struct {
@@ -39,11 +40,14 @@ type LocationView struct {
 }
 
 type RequirementView struct {
-	Type       string `json:"type"`
-	Value      string `json:"value"`
-	RawText    string `json:"raw_text,omitempty"`
-	Importance string `json:"importance,omitempty"`
-	Status     string `json:"status,omitempty"`
+	Type          string `json:"type"`
+	Value         string `json:"value"`
+	RawText       string `json:"raw_text,omitempty"`
+	SemanticLabel string `json:"semantic_label,omitempty"`
+	Category      string `json:"category,omitempty"`
+	CanonicalType string `json:"canonical_type,omitempty"`
+	Importance    string `json:"importance,omitempty"`
+	Status        string `json:"status,omitempty"`
 }
 
 type PendingView struct {
@@ -70,8 +74,18 @@ type VehicleView struct {
 }
 
 type TurnResponse struct {
-	Message  string        `json:"message"`
-	Pending  *PendingView  `json:"pending,omitempty"`
-	Vehicles []VehicleView `json:"vehicles"`
-	State    StateView     `json:"state"`
+	Message                string                      `json:"message"`
+	Pending                *PendingView                `json:"pending,omitempty"`
+	Vehicles               []VehicleView               `json:"vehicles"`
+	RequirementResolutions []RequirementResolutionView `json:"requirement_resolutions,omitempty"`
+	State                  StateView                   `json:"state"`
+}
+
+type RequirementResolutionView struct {
+	ID         string   `json:"id"`
+	RawText    string   `json:"raw_text"`
+	Status     string   `json:"status"`
+	Executions []string `json:"executions,omitempty"`
+	ReasonCode string   `json:"reason_code,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/internal/progress"
+	"github.com/zxq97/agent/internal/requirement"
 	"github.com/zxq97/agent/internal/session"
 	"github.com/zxq97/agent/internal/vehiclecatalog"
 )
@@ -47,29 +48,31 @@ func (h *Handler) Handle(ctx context.Context, agentSession *session.AgentSession
 		deltas = append(deltas, h.normalize(requirement))
 	}
 	merged, changed := merge(agentSession.Search.Requirements, extracted.Requirements, deltas)
+	result := &UpdateResult{Changed: changed, Requirements: append([]session.SearchRequirementStateItem(nil), merged...)}
 	if changed {
-		agentSession.Search.Requirements = merged
-		agentSession.Search.RequirementVersion++
-		agentSession.Search.Goal.Status = session.SearchGoalActive
-		if len(merged) > 0 {
-			agentSession.Search.Goal.NoPreference = false
-		}
-		agentSession.Search.ActiveSearch = nil
-		appendHistory(agentSession, input.SourceText)
+		result.Deltas = []session.StateDelta{&session.RequirementDelta{
+			Requirements:      merged,
+			IncrementVersion:  true,
+			ActivateGoal:      true,
+			ClearNoPreference: len(merged) > 0,
+			MemoryText:        input.SourceText,
+		}}
 	}
-	return &UpdateResult{Changed: changed, Requirements: append([]session.SearchRequirementStateItem(nil), merged...)}, nil
+	return result, nil
 }
 
 func extractionInput(agentSession *session.AgentSession, sourceText string) *ExtractionInput {
 	input := &ExtractionInput{SourceText: sourceText, CurrentRequirements: make([]RequirementView, 0, len(agentSession.Search.Requirements))}
 	for _, requirement := range agentSession.Search.Requirements {
 		input.CurrentRequirements = append(input.CurrentRequirements, RequirementView{
-			Facet:          requirement.Facet,
-			RawValue:       requirement.RawValue,
-			CanonicalValue: requirement.CanonicalValue,
-			Operator:       requirement.Operator,
-			Importance:     requirement.Importance,
-			Status:         requirement.Status,
+			RawText:       requirement.RawText,
+			SemanticLabel: requirement.SemanticLabel,
+			Category:      requirement.Category,
+			CanonicalType: requirement.CanonicalType,
+			Value:         requirement.Value,
+			Operator:      requirement.Operator,
+			Importance:    requirement.Importance,
+			Status:        requirement.Status,
 		})
 	}
 	history := agentSession.Memory.RecentSearchCarTexts
@@ -81,25 +84,41 @@ func extractionInput(agentSession *session.AgentSession, sourceText string) *Ext
 }
 
 func (h *Handler) normalize(requirement Requirement) session.SearchRequirementStateItem {
-	canonical := normalizeScalar(requirement.Facet, requirement.RawValue)
+	facet := requirement.CanonicalType
+	if facet == "" {
+		facet = requirement.Facet
+	}
+	raw := requirement.RawValue
+	if raw == "" {
+		raw = rawValue(requirement.Value)
+	}
+	canonical := normalizeRequirementValue(facet, requirement)
+	id := requirementID(facet, canonical, requirement.Operator)
+	if facet == "" {
+		id = semanticRequirementID(requirement)
+	}
 	item := session.SearchRequirementStateItem{
-		ID:               requirementID(requirement.Facet, canonical, requirement.Operator),
-		Facet:            string(requirement.Facet),
+		ID:               id,
+		Facet:            string(facet),
 		RawText:          requirement.RawText,
-		RawValue:         requirement.RawValue,
+		RawValue:         raw,
 		CanonicalValue:   canonical,
+		SemanticLabel:    requirement.SemanticLabel,
+		Category:         requirement.Category,
+		CanonicalType:    string(facet),
+		Value:            requirement.Value,
 		Operator:         string(requirement.Operator),
 		Importance:       string(requirement.Importance),
 		Status:           "active",
 		EntityResolution: "",
 		CatalogVersion:   h.entities.Version(),
 	}
-	entityType := entityTypeForFacet(requirement.Facet)
-	if entityType == "" || requirement.RawValue == "" {
+	entityType := entityTypeForFacet(facet)
+	if entityType == "" || raw == "" {
 		return item
 	}
 	resolution := h.entities.Resolve(&vehiclecatalog.ResolveInput{
-		Name:       requirement.RawValue,
+		Name:       raw,
 		Type:       entityType,
 		BrandHint:  requirement.EntityContext.BrandHint,
 		SeriesHint: requirement.EntityContext.SeriesHint,
@@ -114,8 +133,54 @@ func (h *Handler) normalize(requirement Requirement) session.SearchRequirementSt
 	item.EntityBrandID = resolution.Entity.BrandID
 	item.EntityParentID = resolution.Entity.ParentID
 	item.CanonicalValue = resolution.Entity.CanonicalName
-	item.ID = requirementID(requirement.Facet, item.CanonicalValue, requirement.Operator)
+	item.ID = requirementID(facet, item.CanonicalValue, requirement.Operator)
 	return item
+}
+
+func normalizeRequirementValue(facet Facet, value Requirement) string {
+	if facet != FacetPricePreference {
+		return normalizeScalar(facet, value.RawValue)
+	}
+	unit := strings.ToLower(strings.TrimSpace(value.Value.Unit))
+	scope := "total"
+	if unit == "daily_cny" {
+		scope = "daily"
+	}
+	switch value.Value.Kind {
+	case requirement.ValueNumber:
+		if value.Value.Number != nil {
+			return scope + operatorSymbol(value.Operator) +
+				fmt.Sprintf("%g", *value.Value.Number) + "CNY"
+		}
+	case requirement.ValueRange:
+		if value.Value.Range != nil {
+			if value.Value.Range.Min != nil && value.Value.Range.Max != nil {
+				return fmt.Sprintf("%s=%g..%gCNY", scope, *value.Value.Range.Min, *value.Value.Range.Max)
+			}
+			if value.Value.Range.Min != nil {
+				return fmt.Sprintf("%s>=%gCNY", scope, *value.Value.Range.Min)
+			}
+			if value.Value.Range.Max != nil {
+				return fmt.Sprintf("%s<=%gCNY", scope, *value.Value.Range.Max)
+			}
+		}
+	}
+	return normalizeScalar(facet, value.RawValue)
+}
+
+func operatorSymbol(value Operator) string {
+	switch value {
+	case OperatorLT:
+		return "<"
+	case OperatorLTE:
+		return "<="
+	case OperatorGT:
+		return ">"
+	case OperatorGTE:
+		return ">="
+	default:
+		return "="
+	}
 }
 
 func entityTypeForFacet(facet Facet) vehiclecatalog.EntityType {
@@ -168,12 +233,21 @@ func normalizeScalar(facet Facet, value string) string {
 func merge(current []session.SearchRequirementStateItem, operations []Requirement, normalized []session.SearchRequirementStateItem) ([]session.SearchRequirementStateItem, bool) {
 	result := append([]session.SearchRequirementStateItem(nil), current...)
 	for index, operation := range operations {
+		facet := operation.CanonicalType
+		if facet == "" {
+			facet = operation.Facet
+		}
 		switch operation.Operation {
 		case OperationRemove:
 			result = removeRequirement(result, operation, normalized[index])
 		case OperationReplace:
-			next := removeFacet(result, string(operation.Facet))
-			next = reconcileReplacedVehicleEntity(next, operation.Facet, normalized[index])
+			next := result
+			if facet == "" {
+				next = removeMatchingOpenRequirement(next, normalized[index])
+			} else {
+				next = removeFacet(next, string(facet))
+				next = reconcileReplacedVehicleEntity(next, facet, normalized[index])
+			}
 			if !containsRequirement(next, normalized[index]) {
 				next = append(next, normalized[index])
 			}
@@ -240,9 +314,17 @@ func removeFacet(values []session.SearchRequirementStateItem, facet string) []se
 
 func removeRequirement(values []session.SearchRequirementStateItem, operation Requirement, normalized session.SearchRequirementStateItem) []session.SearchRequirementStateItem {
 	canonical := normalized.CanonicalValue
+	facet := operation.CanonicalType
+	if facet == "" {
+		facet = operation.Facet
+	}
 	result := make([]session.SearchRequirementStateItem, 0, len(values))
 	for _, value := range values {
-		if value.Facet == string(operation.Facet) && (canonical == "" || strings.EqualFold(value.CanonicalValue, canonical) || strings.EqualFold(value.RawValue, operation.RawValue)) {
+		if facet == "" {
+			if value.Facet == "" && openRequirementMatches(value, normalized) {
+				continue
+			}
+		} else if value.Facet == string(facet) && (canonical == "" || strings.EqualFold(value.CanonicalValue, canonical) || strings.EqualFold(value.RawValue, operation.RawValue)) {
 			continue
 		}
 		result = append(result, value)
@@ -256,7 +338,12 @@ func sameRequirements(left, right []session.SearchRequirementStateItem) bool {
 	}
 	for index := range left {
 		if left[index].Facet != right[index].Facet ||
+			left[index].SemanticLabel != right[index].SemanticLabel ||
+			left[index].Category != right[index].Category ||
 			left[index].CanonicalValue != right[index].CanonicalValue ||
+			(left[index].Facet == "" &&
+				(left[index].ID != right[index].ID || left[index].RawText != right[index].RawText ||
+					left[index].RawValue != right[index].RawValue)) ||
 			left[index].Operator != right[index].Operator ||
 			left[index].Importance != right[index].Importance ||
 			left[index].EntityID != right[index].EntityID {
@@ -268,10 +355,14 @@ func sameRequirements(left, right []session.SearchRequirementStateItem) bool {
 
 func containsRequirement(values []session.SearchRequirementStateItem, target session.SearchRequirementStateItem) bool {
 	for _, value := range values {
-		if value.Facet == target.Facet &&
-			value.CanonicalValue == target.CanonicalValue &&
-			value.Operator == target.Operator &&
-			value.Importance == target.Importance {
+		if value.ID == target.ID {
+			return true
+		}
+		if target.Facet != "" &&
+			(value.Facet == target.Facet &&
+				value.CanonicalValue == target.CanonicalValue &&
+				value.Operator == target.Operator &&
+				value.Importance == target.Importance) {
 			return true
 		}
 	}
@@ -283,12 +374,37 @@ func requirementID(facet Facet, value string, operator Operator) string {
 	return fmt.Sprintf("%s:%x", facet, sum[:6])
 }
 
-func appendHistory(agentSession *session.AgentSession, sourceText string) {
-	if strings.TrimSpace(sourceText) == "" {
-		return
+func semanticRequirementID(value Requirement) string {
+	fingerprint := strings.Join([]string{
+		string(value.Category),
+		normalizeOpenText(value.RawText),
+		string(value.Operator),
+	}, "|")
+	sum := sha256.Sum256([]byte(fingerprint))
+	return fmt.Sprintf("semantic:%x", sum[:6])
+}
+
+func removeMatchingOpenRequirement(values []session.SearchRequirementStateItem, target session.SearchRequirementStateItem) []session.SearchRequirementStateItem {
+	result := make([]session.SearchRequirementStateItem, 0, len(values))
+	for _, value := range values {
+		if value.Facet == "" && openRequirementMatches(value, target) {
+			continue
+		}
+		result = append(result, value)
 	}
-	agentSession.Memory.RecentSearchCarTexts = append(agentSession.Memory.RecentSearchCarTexts, sourceText)
-	if len(agentSession.Memory.RecentSearchCarTexts) > 10 {
-		agentSession.Memory.RecentSearchCarTexts = append([]string(nil), agentSession.Memory.RecentSearchCarTexts[len(agentSession.Memory.RecentSearchCarTexts)-10:]...)
+	return result
+}
+
+func openRequirementMatches(left, right session.SearchRequirementStateItem) bool {
+	if left.ID != "" && right.ID != "" && left.ID == right.ID {
+		return true
 	}
+	if left.Category != right.Category {
+		return false
+	}
+	return normalizeOpenText(left.RawText) == normalizeOpenText(right.RawText)
+}
+
+func normalizeOpenText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), ""))
 }

@@ -1,11 +1,13 @@
 package searchcar
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/internal/searchplan"
+	"github.com/zxq97/agent/internal/searchruntime"
 	"github.com/zxq97/agent/internal/session"
 )
 
@@ -73,17 +75,17 @@ func TestPreviousAndNextUseCachedBatches(t *testing.T) {
 	firstVehicle := guide.VehRate{Vehicle: &guide.Vehicle{VehicleCode: "first"}}
 	secondVehicle := guide.VehRate{Vehicle: &guide.Vehicle{VehicleCode: "second"}}
 	agentSession := &session.AgentSession{Search: session.SearchState{ActiveSearch: &session.ActiveSearchSnapshot{
-		Plan: plan, CurrentPage: 2, ContinuationContextID: "latest",
+		CurrentPage: 2, ContinuationContextID: "latest",
 		Batches: []session.SearchResultBatch{
-			{RequestPage: 1, Vehicles: []guide.VehRate{firstVehicle}},
-			{RequestPage: 2, Vehicles: []guide.VehRate{secondVehicle}},
+			{RequestPage: 1, Vehicles: searchruntime.QuotesFromGuide([]guide.VehRate{firstVehicle})},
+			{RequestPage: 2, Vehicles: searchruntime.QuotesFromGuide([]guide.VehRate{secondVehicle})},
 		},
 	}}}
-	previous := previousBatch(agentSession)
+	previous := previousBatch(agentSession, plan)
 	if previous == nil || previous.RequestPage != 1 || previous.Vehicles[0].Vehicle.VehicleCode != "first" {
 		t.Fatalf("previous=%#v", previous)
 	}
-	next := nextCachedBatch(agentSession)
+	next := nextCachedBatch(agentSession, plan)
 	if next == nil || next.RequestPage != 2 || next.Vehicles[0].Vehicle.VehicleCode != "second" {
 		t.Fatalf("next=%#v", next)
 	}
@@ -95,24 +97,28 @@ func TestSnapshotValidationRejectsChangedRequirementsAndExpiredContext(t *testin
 	returnTime := pickup.Add(time.Hour)
 	state := session.SearchState{
 		Location: &session.LocationRef{ID: "poi"}, PickupTime: &pickup, ReturnTime: &returnTime,
-		RequirementVersion: 2,
+		RequirementVersion: 2, Baseline: &session.GuideBaselineCache{},
 	}
+	handler := &SearchCarHandler{compiler: searchplan.NewExecutionCompiler(searchplan.NewCompiler(), nil)}
+	runtime := handler.runtimeCapabilityContext(state, state.Baseline)
+	runtimeFingerprint := searchplan.RuntimeFingerprint(runtime)
+	executionPlan := handler.compileExecutionPlan(context.Background(), &session.AgentSession{Search: state}, state.Baseline)
 	state.ActiveSearch = &session.ActiveSearchSnapshot{
 		RentalFingerprint: rentalFingerprint(state), RequirementVersion: 2,
-		FilterPlanHash: "plan", Plan: searchplan.FilterPlan{PlanHash: "plan"},
+		FilterPlanHash:    executionPlan.PlanHash,
+		CapabilityVersion: handler.compiler.CatalogVersion(), RuntimeFingerprint: runtimeFingerprint,
 		ContinuationContextID: "context", Status: session.SearchSnapshotActive, ExpiresAt: now.Add(time.Minute),
 	}
-	handler := &SearchCarHandler{}
 	agentSession := &session.AgentSession{Search: state}
-	if !handler.snapshotValid(agentSession, now) {
+	if _, valid := handler.validContinuationPlan(context.Background(), agentSession, now); !valid {
 		t.Fatal("valid snapshot was rejected")
 	}
 	agentSession.Search.RequirementVersion++
-	if handler.snapshotValid(agentSession, now) {
+	if _, valid := handler.validContinuationPlan(context.Background(), agentSession, now); valid {
 		t.Fatal("snapshot survived a requirement version change")
 	}
 	agentSession.Search.RequirementVersion--
-	if handler.snapshotValid(agentSession, now.Add(2*time.Minute)) {
+	if _, valid := handler.validContinuationPlan(context.Background(), agentSession, now.Add(2*time.Minute)); valid {
 		t.Fatal("expired snapshot was accepted")
 	}
 }

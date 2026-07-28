@@ -2,6 +2,7 @@ package generalreply
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,9 @@ import (
 const generalReplyTestConfigPath = "../../../conf/dev.yaml"
 
 func TestLLMHandlerWithRemoteService(t *testing.T) {
+	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
+		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real LLM integration tests")
+	}
 	cfg, err := config.Load(generalReplyTestConfigPath)
 	if err != nil {
 		t.Fatal(err)

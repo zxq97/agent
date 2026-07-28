@@ -1,10 +1,13 @@
 package searchcar
 
 import (
-	"strings"
+	"time"
 
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/internal/capability"
 	"github.com/zxq97/agent/internal/searchplan"
+	"github.com/zxq97/agent/internal/session"
+	"github.com/zxq97/agent/internal/turnnormalizer"
 )
 
 type SearchOperation string
@@ -17,29 +20,15 @@ const (
 )
 
 func ParseOperation(evidenceText string) SearchOperation {
-	text := strings.ToLower(strings.TrimSpace(evidenceText))
-	for _, phrase := range []string{"上一批", "上一页", "返回上一"} {
-		if strings.Contains(text, phrase) {
-			return OperationPreviousBatch
-		}
-	}
-	for _, phrase := range []string{"刷新", "重新搜", "重新查", "更新一下"} {
-		if strings.Contains(text, phrase) {
-			return OperationRefresh
-		}
-	}
-	for _, phrase := range []string{"换一批", "还有别的", "还有其他", "下一批", "下一页", "继续看", "更多"} {
-		if strings.Contains(text, phrase) {
-			return OperationNextBatch
-		}
-	}
-	return OperationSearchNow
+	return SearchOperation(turnnormalizer.NormalizeSearch(evidenceText).Operation)
 }
 
 type SearchCarInput struct {
-	Operation    SearchOperation
-	EvidenceText string
-	PageSize     int
+	Operation            SearchOperation
+	EvidenceText         string
+	NoPreferenceExplicit bool
+	PageSize             int
+	ReceivedAt           time.Time
 }
 
 type SearchMissingField string
@@ -85,6 +74,8 @@ type SearchCarResult struct {
 	Message                string
 	RankingScope           string
 	RequestPage            int
+	Deltas                 []session.StateDelta
+	CapabilityResolutions  []capability.Resolution
 }
 
 func NeedsRequirementResult(message string) *SearchCarResult {

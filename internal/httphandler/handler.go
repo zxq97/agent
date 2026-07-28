@@ -99,7 +99,7 @@ func (h *Handler) handleCreateSession(writer http.ResponseWriter, request *http.
 		jsonError(writer, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	detail, err := h.service.CreateSession(input.UserID)
+	detail, err := h.service.CreateSession(request.Context(), input.UserID)
 	if err != nil {
 		jsonError(writer, err.Error(), http.StatusBadRequest)
 		return
@@ -113,11 +113,16 @@ func (h *Handler) handleListSessions(writer http.ResponseWriter, request *http.R
 		jsonError(writer, "user_id query param is required", http.StatusBadRequest)
 		return
 	}
-	jsonOK(writer, h.service.ListSessions(userID))
+	values, err := h.service.ListSessions(request.Context(), userID)
+	if err != nil {
+		jsonError(writer, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonOK(writer, values)
 }
 
 func (h *Handler) handleGetSession(writer http.ResponseWriter, request *http.Request) {
-	detail, err := h.service.GetSession(request.URL.Query().Get("user_id"), request.PathValue("id"))
+	detail, err := h.service.GetSession(request.Context(), request.URL.Query().Get("user_id"), request.PathValue("id"))
 	if err != nil {
 		jsonError(writer, "session not found", http.StatusNotFound)
 		return
@@ -126,8 +131,8 @@ func (h *Handler) handleGetSession(writer http.ResponseWriter, request *http.Req
 }
 
 func (h *Handler) handleDeleteSession(writer http.ResponseWriter, request *http.Request) {
-	deleted := h.service.DeleteSession(request.URL.Query().Get("user_id"), request.PathValue("id"))
-	if !deleted {
+	err := h.service.DeleteSession(request.Context(), request.URL.Query().Get("user_id"), request.PathValue("id"))
+	if err != nil {
 		jsonError(writer, "session not found", http.StatusNotFound)
 		return
 	}

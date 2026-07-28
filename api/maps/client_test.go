@@ -2,6 +2,7 @@ package maps
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/zxq97/agent/internal/config"
@@ -11,6 +12,9 @@ import (
 const devConfigPath = "../../conf/dev.yaml"
 
 func TestRemoteSearch(t *testing.T) {
+	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
+		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real Maps integration tests")
+	}
 	search, err := newRemoteClient(t).Search(remoteContext("remote-maps-search-test"), &SearchRequest{Keyword: "南京路"})
 	if err != nil {
 		t.Fatal(err)

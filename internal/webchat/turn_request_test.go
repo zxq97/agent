@@ -50,3 +50,16 @@ func TestBuildTurnRequestDeduplicatesGeneralTextExactly(t *testing.T) {
 		t.Fatalf("general text=%q", request.GeneralReply.SourceText)
 	}
 }
+
+func TestBuildTurnRequestNormalizesNoPreferenceOutsidePolicy(t *testing.T) {
+	request := buildTurnRequest("车型都可以，直接搜", nil, &router.RouteResult{
+		Candidates: []router.RouteCandidate{{
+			Action: router.ActionRequestVehicleSearch, EvidenceText: "车型都可以，直接搜",
+		}},
+	})
+	if request.SearchRequest == nil ||
+		request.SearchRequest.Operation != searchcar.OperationSearchNow ||
+		!request.SearchRequest.NoPreferenceExplicit {
+		t.Fatalf("search control was not normalized: %#v", request.SearchRequest)
+	}
+}

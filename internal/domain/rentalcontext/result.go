@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/zxq97/agent/api/maps"
+	"github.com/zxq97/agent/internal/session"
 )
 
 type ResultStatus string
@@ -32,4 +33,5 @@ type ModifyRentalContextResult struct {
 	InteractionID   string
 	LocationOptions []maps.Candidate
 	Message         string
+	Deltas          []session.StateDelta
 }
