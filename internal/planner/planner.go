@@ -13,6 +13,8 @@ const (
 	ActionModifyRentalContext       ActionType = "modify_rental_context"
 	ActionUpdateVehicleRequirements ActionType = "update_vehicle_requirements"
 	ActionExecuteVehicleSearch      ActionType = "execute_vehicle_search"
+	ActionCompareVehicles           ActionType = "compare_vehicles"
+	ActionQueryRentalRules          ActionType = "query_rental_rules"
 	ActionGeneralReply              ActionType = "general_reply"
 )
 
@@ -74,6 +76,8 @@ func (p *Planner) Build(candidates []Candidate) ActionPlan {
 		ActionModifyRentalContext,
 		ActionUpdateVehicleRequirements,
 		ActionExecuteVehicleSearch,
+		ActionCompareVehicles,
+		ActionQueryRentalRules,
 		ActionGeneralReply,
 	}
 	result := ActionPlan{}
@@ -125,7 +129,8 @@ func (p ActionPlan) Action(actionType ActionType) *PlannedAction {
 func validAction(value ActionType) bool {
 	switch value {
 	case ActionModifyRentalContext, ActionUpdateVehicleRequirements,
-		ActionExecuteVehicleSearch, ActionGeneralReply:
+		ActionExecuteVehicleSearch, ActionCompareVehicles,
+		ActionQueryRentalRules, ActionGeneralReply:
 		return true
 	default:
 		return false

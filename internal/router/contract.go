@@ -72,7 +72,8 @@ func (e routeCandidateEnvelope) result() (RouteCandidate, error) {
 		return RouteCandidate{}, errors.New("action, evidence_text and confidence are required")
 	}
 	switch *e.Action {
-	case ActionModifyRentalContext, ActionUpdateVehicleRequirements, ActionRequestVehicleSearch, ActionGeneralReply:
+	case ActionModifyRentalContext, ActionUpdateVehicleRequirements, ActionRequestVehicleSearch,
+		ActionCompareVehicles, ActionQueryRentalRules, ActionGeneralReply:
 	default:
 		return RouteCandidate{}, errors.Errorf("invalid action %q", *e.Action)
 	}

@@ -11,6 +11,8 @@ const (
 	ActionModifyRentalContext       ActionType = "modify_rental_context"
 	ActionUpdateVehicleRequirements ActionType = "update_vehicle_requirements"
 	ActionRequestVehicleSearch      ActionType = "request_vehicle_search"
+	ActionCompareVehicles           ActionType = "compare_vehicles"
+	ActionQueryRentalRules          ActionType = "query_rental_rules"
 	ActionGeneralReply              ActionType = "general_reply"
 )
 

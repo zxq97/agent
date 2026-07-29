@@ -5,7 +5,9 @@ import (
 
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/orchestrator"
 	"github.com/zxq97/agent/internal/planner"
@@ -37,6 +39,10 @@ func buildTurnRequest(sourceText string, history []Message, routes *router.Route
 			candidates = append(candidates, planner.Candidate{Type: planner.ActionUpdateVehicleRequirements, EvidenceText: candidate.EvidenceText})
 		case router.ActionRequestVehicleSearch:
 			candidates = append(candidates, planner.Candidate{Type: planner.ActionExecuteVehicleSearch, EvidenceText: candidate.EvidenceText})
+		case router.ActionCompareVehicles:
+			candidates = append(candidates, planner.Candidate{Type: planner.ActionCompareVehicles, EvidenceText: candidate.EvidenceText})
+		case router.ActionQueryRentalRules:
+			candidates = append(candidates, planner.Candidate{Type: planner.ActionQueryRentalRules, EvidenceText: candidate.EvidenceText})
 		case router.ActionGeneralReply:
 			candidates = append(candidates, planner.Candidate{Type: planner.ActionGeneralReply, EvidenceText: candidate.EvidenceText})
 		}
@@ -58,6 +64,12 @@ func buildTurnRequest(sourceText string, history []Message, routes *router.Route
 			EvidenceText:         action.EvidenceText,
 			NoPreferenceExplicit: signals.NoPreference,
 		}
+	}
+	if action := request.Plan.Action(planner.ActionCompareVehicles); action != nil {
+		request.VehicleComparison = &vehiclecompare.Input{EvidenceText: action.EvidenceText}
+	}
+	if action := request.Plan.Action(planner.ActionQueryRentalRules); action != nil {
+		request.RentalRules = &rentalrules.Input{EvidenceText: action.EvidenceText}
 	}
 	if action := request.Plan.Action(planner.ActionGeneralReply); action != nil {
 		request.GeneralReply.SourceText = action.EvidenceText

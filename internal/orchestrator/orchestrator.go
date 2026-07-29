@@ -8,7 +8,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/pendingresolver"
 	"github.com/zxq97/agent/internal/planner"
@@ -31,6 +33,14 @@ type SearchCarHandler interface {
 
 type GeneralReplyHandler interface {
 	Handle(context.Context, *session.AgentSession, *generalreply.Input) (*generalreply.Result, error)
+}
+
+type VehicleComparisonHandler interface {
+	Handle(context.Context, *session.AgentSession, *vehiclecompare.Input) (*vehiclecompare.Result, error)
+}
+
+type RentalRulesHandler interface {
+	Handle(context.Context, *rentalrules.Input) (*rentalrules.Result, error)
 }
 
 type SearchPolicy interface {
@@ -58,6 +68,8 @@ type TurnRequest struct {
 	RentalContext      *rentalcontext.ModifyRentalContextInput
 	VehicleRequirement *vehiclerequirement.UpdateInput
 	SearchRequest      *searchcar.SearchCarInput
+	VehicleComparison  *vehiclecompare.Input
+	RentalRules        *rentalrules.Input
 	GeneralReply       *generalreply.Input
 }
 
@@ -65,6 +77,8 @@ type TurnResult struct {
 	RentalContext      []*rentalcontext.ModifyRentalContextResult
 	VehicleRequirement *vehiclerequirement.UpdateResult
 	SearchCar          *searchcar.SearchCarResult
+	VehicleComparison  *vehiclecompare.Result
+	RentalRules        *rentalrules.Result
 	GeneralReply       *generalreply.Result
 
 	ActivePending     *session.PendingInteraction
@@ -92,6 +106,24 @@ type Orchestrator struct {
 	planner     *planner.Planner
 	now         func() time.Time
 	general     GeneralReplyHandler
+	comparison  VehicleComparisonHandler
+	rules       RentalRulesHandler
+}
+
+func NewWithExtensions(
+	rental RentalContextHandler,
+	requirement VehicleRequirementHandler,
+	search SearchCarHandler,
+	policy SearchPolicy,
+	now func() time.Time,
+	general GeneralReplyHandler,
+	comparison VehicleComparisonHandler,
+	rules RentalRulesHandler,
+) *Orchestrator {
+	value := New(rental, requirement, search, policy, now, general)
+	value.comparison = comparison
+	value.rules = rules
+	return value
 }
 
 func New(
@@ -358,6 +390,28 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	case searchpolicy.DecisionWaitPending, searchpolicy.DecisionSkip:
 	}
 
+	if request.VehicleComparison != nil {
+		if o.comparison == nil {
+			return nil, errors.New("orchestrator execute: vehicle comparison handler is required")
+		}
+		comparisonResult, err := o.comparison.Handle(ctx, agentSession, request.VehicleComparison)
+		if err != nil {
+			return nil, err
+		}
+		result.VehicleComparison = comparisonResult
+	}
+
+	if request.RentalRules != nil {
+		if o.rules == nil {
+			return nil, errors.New("orchestrator execute: rental rules handler is required")
+		}
+		ruleResult, err := o.rules.Handle(ctx, request.RentalRules)
+		if err != nil {
+			return nil, err
+		}
+		result.RentalRules = ruleResult
+	}
+
 	generalInput := request.GeneralReply
 	if generalInput != nil {
 		fallbackTexts = appendUniqueText(fallbackTexts, generalInput.SourceText)
@@ -435,6 +489,12 @@ func (o *Orchestrator) ensurePlan(request *TurnRequest) planner.ActionPlan {
 	if request.SearchRequest != nil {
 		candidates = append(candidates, planner.Candidate{Type: planner.ActionExecuteVehicleSearch, EvidenceText: request.SearchRequest.EvidenceText})
 	}
+	if request.VehicleComparison != nil {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionCompareVehicles, EvidenceText: request.VehicleComparison.EvidenceText})
+	}
+	if request.RentalRules != nil {
+		candidates = append(candidates, planner.Candidate{Type: planner.ActionQueryRentalRules, EvidenceText: request.RentalRules.EvidenceText})
+	}
 	if request.GeneralReply != nil && request.GeneralReply.SourceText != "" {
 		candidates = append(candidates, planner.Candidate{Type: planner.ActionGeneralReply, EvidenceText: request.GeneralReply.SourceText})
 	}
@@ -473,6 +533,22 @@ func applyActionPlan(request *TurnRequest) {
 			input.NoPreferenceExplicit = signals.NoPreference
 		}
 		request.SearchRequest = &input
+	}
+	if action := request.Plan.Action(planner.ActionCompareVehicles); action != nil {
+		if request.VehicleComparison == nil {
+			request.VehicleComparison = &vehiclecompare.Input{}
+		}
+		input := *request.VehicleComparison
+		input.EvidenceText = appendEvidence(input.EvidenceText, action.EvidenceText)
+		request.VehicleComparison = &input
+	}
+	if action := request.Plan.Action(planner.ActionQueryRentalRules); action != nil {
+		if request.RentalRules == nil {
+			request.RentalRules = &rentalrules.Input{}
+		}
+		input := *request.RentalRules
+		input.EvidenceText = appendEvidence(input.EvidenceText, action.EvidenceText)
+		request.RentalRules = &input
 	}
 	if action := request.Plan.Action(planner.ActionGeneralReply); action != nil {
 		if request.GeneralReply == nil {

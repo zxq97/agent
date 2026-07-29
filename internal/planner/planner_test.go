@@ -47,3 +47,17 @@ func TestActionPlanBindsBaseVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildOrdersComparisonAndRulesAfterSearch(t *testing.T) {
+	plan := New().Build([]Candidate{
+		{Type: ActionQueryRentalRules, EvidenceText: "取消规则"},
+		{Type: ActionCompareVehicles, EvidenceText: "对比1和2"},
+		{Type: ActionExecuteVehicleSearch, EvidenceText: "直接搜"},
+	})
+	if len(plan.Actions) != 3 ||
+		plan.Actions[0].Type != ActionExecuteVehicleSearch ||
+		plan.Actions[1].Type != ActionCompareVehicles ||
+		plan.Actions[2].Type != ActionQueryRentalRules {
+		t.Fatalf("unexpected plan: %#v", plan)
+	}
+}

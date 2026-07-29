@@ -247,6 +247,24 @@ func cacheCompleted(value *SessionEnvelope, completed CompletedRequest) {
 func cloneTurnResponse(value TurnResponse) TurnResponse {
 	cloned := value
 	cloned.Vehicles = append([]VehicleView(nil), value.Vehicles...)
+	cloned.RentalRules = append([]RentalRuleView(nil), value.RentalRules...)
+	if value.VehicleComparison != nil {
+		comparison := *value.VehicleComparison
+		comparison.Options = cloneComparisonOptions(value.VehicleComparison.Options)
+		comparison.Candidates = cloneComparisonOptions(value.VehicleComparison.Candidates)
+		comparison.Limitations = append([]string(nil), value.VehicleComparison.Limitations...)
+		if value.VehicleComparison.Highlights != nil {
+			highlights := *value.VehicleComparison.Highlights
+			highlights.LowestTotalPriceIndexes = append([]int(nil), value.VehicleComparison.Highlights.LowestTotalPriceIndexes...)
+			highlights.MostSeatsIndexes = append([]int(nil), value.VehicleComparison.Highlights.MostSeatsIndexes...)
+			if value.VehicleComparison.Highlights.TotalPriceSpread != nil {
+				spread := *value.VehicleComparison.Highlights.TotalPriceSpread
+				highlights.TotalPriceSpread = &spread
+			}
+			comparison.Highlights = &highlights
+		}
+		cloned.VehicleComparison = &comparison
+	}
 	cloned.RequirementResolutions = make([]RequirementResolutionView, len(value.RequirementResolutions))
 	for index := range value.RequirementResolutions {
 		cloned.RequirementResolutions[index] = value.RequirementResolutions[index]
@@ -268,6 +286,30 @@ func cloneTurnResponse(value TurnResponse) TurnResponse {
 	cloned.Pending = clonePendingView(value.Pending)
 	cloned.State.Pending = clonePendingView(value.State.Pending)
 	return cloned
+}
+
+func cloneComparisonOptions(values []ComparisonOptionView) []ComparisonOptionView {
+	result := make([]ComparisonOptionView, len(values))
+	for index := range values {
+		result[index] = values[index]
+		if values[index].TotalAmount != nil {
+			total := *values[index].TotalAmount
+			result[index].TotalAmount = &total
+		}
+		if values[index].DailyDeductionAmount != nil {
+			daily := *values[index].DailyDeductionAmount
+			result[index].DailyDeductionAmount = &daily
+		}
+		if values[index].FuelTypeCode != nil {
+			fuel := *values[index].FuelTypeCode
+			result[index].FuelTypeCode = &fuel
+		}
+		if values[index].TransmissionTypeCode != nil {
+			transmission := *values[index].TransmissionTypeCode
+			result[index].TransmissionTypeCode = &transmission
+		}
+	}
+	return result
 }
 
 func clonePendingView(value *PendingView) *PendingView {

@@ -43,9 +43,9 @@ func (r *LLMRouter) Route(ctx context.Context, input *Input) (*RouteResult, erro
 func routeTask() llmharness.Task[Input, RouteResult] {
 	return llmharness.Task[Input, RouteResult]{
 		ID:               LLMTaskID,
-		PromptVersion:    "1.0.0",
-		SchemaVersion:    "router-output/1",
-		ValidatorVersion: "1.0.0",
+		PromptVersion:    "1.1.0",
+		SchemaVersion:    "router-output/2",
+		ValidatorVersion: "1.1.0",
 		ValidateInput:    validateRouteInput,
 		BuildRequest:     buildRouteRequest,
 		DecodeStrict:     decodeRouteResultStrict,
@@ -108,7 +108,7 @@ const routeSystemPrompt = `你是租车智能体的顶层多标签 Router。你�
 {
   "candidates": [
     {
-      "action": "modify_rental_context | update_vehicle_requirements | request_vehicle_search | general_reply",
+      "action": "modify_rental_context | update_vehicle_requirements | request_vehicle_search | compare_vehicles | query_rental_rules | general_reply",
       "evidence_text": "从 source_text 原样复制的连续证据",
       "confidence": 0.0
     }
@@ -129,12 +129,18 @@ Action 定义：
    - 租车条件已完整且系统刚询问车辆偏好时，“都行”“随便”“看着办”“没有要求”表示按当前条件开始搜索。
    - 用户要求继续、切换或刷新已有结果，例如“换一批”“还有别的吗”“下一页”“上一批”“刷新一下”“重新搜”。
    - 分页不是独立顶层 Action；具体 fresh/next/previous/refresh 由搜索领域根据 evidence_text 和 SearchSnapshot 确定。
-4. general_reply
+4. compare_vehicles
+   - 用户要求对比当前搜索结果中的两个到四个车辆，如“对比1和3”“这两辆哪个好”。
+   - 只对比已有搜索结果，不表示重新搜索或修改车辆条件。
+5. query_rental_rules
+   - 用户询问证件、年龄驾龄、押金、取消改期、里程、燃油充电、超时续租、异地还车、附加驾驶人或保障规则。
+   - 规则查询不路由到 general_reply，也不能把问题当作车辆筛选条件。
+6. general_reply
    - 闲聊、能力咨询、解释性问题、不支持的任务，或者无法可靠分配的内容。
-   - general_reply 可以与其他 Action 同时出现，例如用户修改时间后又询问规则。
+   - general_reply 可以与其他 Action 同时出现，但租车规则问题优先使用 query_rental_rules。
 
 路由规则：
-1. Router 是多标签，不得把整句强制归为一个 Action。混合输入可以同时返回 modify_rental_context、update_vehicle_requirements、request_vehicle_search、general_reply。
+1. Router 是多标签，不得把整句强制归为一个 Action。混合输入可以同时返回 modify_rental_context、update_vehicle_requirements、request_vehicle_search、compare_vehicles、query_rental_rules、general_reply。
 2. 同一个 Action 最多出现一次；多个不连续证据可以把完整 source_text 作为 evidence_text。
 3. evidence_text 必须是 source_text 中原样存在的连续文本，不得改写、总结或补充。
 4. confidence 范围为 0 到 1，表示路由判断置信度。
@@ -148,6 +154,8 @@ Action 定义：
 12. “换一批/还有别的吗”在有历史搜索时返回 request_vehicle_search；它不表示修改车辆诉求。
 13. 当前取还条件完整，或最近助手刚询问车辆偏好时，纯“都行/随便/看着办/没有要求”返回 request_vehicle_search，不要返回 general_reply。
 14. 至少返回一个 candidate；无法识别时返回 general_reply，不得返回空数组。
+15. “对比SUV和MPV的概念区别”属于 general_reply；“对比搜索结果中的1和2”属于 compare_vehicles。
+16. “取消订单怎么收费”“需要多少押金”“驾龄要求”属于 query_rental_rules。
 
 示例1：
 source_text="明天上午十点在虹桥机场取车"
@@ -187,4 +195,14 @@ has_previous_search=true, source_text="换一批"
 示例8：
 source_text="品牌不限，直接搜"
 输出：
-{"candidates":[{"action":"update_vehicle_requirements","evidence_text":"品牌不限","confidence":0.99},{"action":"request_vehicle_search","evidence_text":"直接搜","confidence":0.99}],"unassigned_text":""}`
+{"candidates":[{"action":"update_vehicle_requirements","evidence_text":"品牌不限","confidence":0.99},{"action":"request_vehicle_search","evidence_text":"直接搜","confidence":0.99}],"unassigned_text":""}
+
+示例9：
+has_previous_search=true, source_text="对比1和3"
+输出：
+{"candidates":[{"action":"compare_vehicles","evidence_text":"对比1和3","confidence":0.99}],"unassigned_text":""}
+
+示例10：
+source_text="取消订单怎么收费"
+输出：
+{"candidates":[{"action":"query_rental_rules","evidence_text":"取消订单怎么收费","confidence":0.99}],"unassigned_text":""}`

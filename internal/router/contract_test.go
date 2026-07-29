@@ -13,6 +13,18 @@ func TestDecodeRouteResultSupportsMultipleActions(t *testing.T) {
 	}
 }
 
+func TestDecodeRouteResultSupportsComparisonAndRentalRules(t *testing.T) {
+	source := "对比1和3，取消订单怎么收费"
+	result, err := decodeRouteResult(`{"candidates":[{"action":"compare_vehicles","evidence_text":"对比1和3","confidence":0.99},{"action":"query_rental_rules","evidence_text":"取消订单怎么收费","confidence":0.98}],"unassigned_text":""}`, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Candidate(ActionCompareVehicles) == nil ||
+		result.Candidate(ActionQueryRentalRules) == nil {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestDecodeRouteResultRejectsInvalidContract(t *testing.T) {
 	source := "想要7座SUV"
 	tests := []struct {

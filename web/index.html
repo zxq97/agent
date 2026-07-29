@@ -406,6 +406,23 @@
     .vehicle-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
     .vehicle-tag { padding: 4px 7px; border-radius: 7px; color: #59675f; background: #eef2ee; font-size: 11px; }
     .vehicle-price { margin-top: 10px; color: #b35c18; font-size: 13px; font-weight: 800; }
+    .comparison-wrap, .rule-list { margin-top: 10px; }
+    .comparison-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: white;
+    }
+    .comparison-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 12px; }
+    .comparison-table th, .comparison-table td { padding: 9px 11px; border-bottom: 1px solid var(--line); text-align: left; }
+    .comparison-table th { color: var(--brand); background: var(--brand-soft); font-weight: 850; }
+    .comparison-table tr:last-child td { border-bottom: 0; }
+    .comparison-note { margin: 8px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .rule-list { display: grid; gap: 8px; }
+    .rule-card { padding: 12px 13px; border: 1px solid #ead9ae; border-radius: 12px; background: #fffaf0; }
+    .rule-title { color: #78561d; font-size: 13px; font-weight: 850; }
+    .rule-guidance { margin-top: 5px; color: #5d5a52; font-size: 12px; line-height: 1.65; }
+    .rule-source { margin-top: 6px; color: #93856e; font-size: 10px; }
 
     .input-area {
       padding: 14px 20px 18px;
@@ -851,6 +868,12 @@
       if (response.vehicles?.length) {
         turn.extra.appendChild(renderVehicles(response.vehicles));
       }
+      if (response.vehicle_comparison) {
+        turn.extra.appendChild(renderComparison(response.vehicle_comparison));
+      }
+      if (response.rental_rules?.length) {
+        turn.extra.appendChild(renderRentalRules(response.rental_rules));
+      }
       state.latestState = response.state || state.latestState;
       renderState(state.latestState);
       scrollBottom();
@@ -898,6 +921,90 @@
         grid.appendChild(card);
       });
       return grid;
+    }
+
+    function renderComparison(comparison) {
+      const root = document.createElement('div');
+      const options = comparison.options?.length ? comparison.options : (comparison.candidates || []);
+      if (!options.length) return root;
+      const wrap = document.createElement('div');
+      wrap.className = 'comparison-wrap';
+      const table = document.createElement('table');
+      table.className = 'comparison-table';
+      const headers = ['序号', '车辆', '品牌/车型组', '座位', '供应商', '当前总价'];
+      const head = document.createElement('tr');
+      headers.forEach(value => {
+        const cell = document.createElement('th');
+        cell.textContent = value;
+        head.appendChild(cell);
+      });
+      const thead = document.createElement('thead');
+      thead.appendChild(head);
+      table.appendChild(thead);
+      const body = document.createElement('tbody');
+      options.forEach(option => {
+        const row = document.createElement('tr');
+        [
+          option.index,
+          option.vehicle_name || '车辆',
+          [option.brand_name, option.group_name].filter(Boolean).join(' / ') || '—',
+          option.seats ? `${option.seats} 座` : '—',
+          option.supplier_name || '—',
+          option.total_amount != null ? `¥${formatAmount(option.total_amount)}` : '—',
+        ].forEach(value => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      wrap.appendChild(table);
+      root.appendChild(wrap);
+      const highlightParts = [];
+      if (comparison.highlights?.lowest_total_price_indexes?.length) {
+        highlightParts.push(`当前总价最低：选项 ${comparison.highlights.lowest_total_price_indexes.join('、')}`);
+      }
+      if (comparison.highlights?.most_seats_indexes?.length) {
+        highlightParts.push(`座位数最多：选项 ${comparison.highlights.most_seats_indexes.join('、')}`);
+      }
+      if (comparison.highlights?.total_price_spread != null) {
+        highlightParts.push(`总价差：¥${formatAmount(comparison.highlights.total_price_spread)}`);
+      }
+      if (highlightParts.length) {
+        const highlight = document.createElement('div');
+        highlight.className = 'comparison-note';
+        highlight.textContent = highlightParts.join('；');
+        root.appendChild(highlight);
+      }
+      if (comparison.limitations?.length) {
+        const note = document.createElement('div');
+        note.className = 'comparison-note';
+        note.textContent = comparison.limitations.join('；');
+        root.appendChild(note);
+      }
+      return root;
+    }
+
+    function renderRentalRules(rules) {
+      const list = document.createElement('div');
+      list.className = 'rule-list';
+      rules.forEach(rule => {
+        const card = document.createElement('article');
+        card.className = 'rule-card';
+        const title = document.createElement('div');
+        title.className = 'rule-title';
+        title.textContent = rule.title || '租车规则';
+        const guidance = document.createElement('div');
+        guidance.className = 'rule-guidance';
+        guidance.textContent = rule.guidance || '';
+        const source = document.createElement('div');
+        source.className = 'rule-source';
+        source.textContent = `核对来源：${rule.source || '具体订单条款'}`;
+        card.append(title, guidance, source);
+        list.appendChild(card);
+      });
+      return list;
     }
 
     function appendMessage(role, content) {

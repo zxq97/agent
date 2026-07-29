@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/planner"
 	"github.com/zxq97/agent/internal/router"
 )
 
@@ -37,6 +38,23 @@ func TestBuildTurnRequestMapsAllActionsInOnePass(t *testing.T) {
 	if request.GeneralReply == nil || request.GeneralReply.SourceText != "顺便说下规则\n还有这部分" ||
 		len(request.GeneralReply.RecentMessages) != len(history) {
 		t.Fatalf("general input=%#v", request.GeneralReply)
+	}
+}
+
+func TestBuildTurnRequestMapsComparisonAndRentalRules(t *testing.T) {
+	request := buildTurnRequest("对比1和2，再说下押金规则", nil, &router.RouteResult{
+		Candidates: []router.RouteCandidate{
+			{Action: router.ActionCompareVehicles, EvidenceText: "对比1和2"},
+			{Action: router.ActionQueryRentalRules, EvidenceText: "押金规则"},
+		},
+	})
+	if request.VehicleComparison == nil ||
+		request.VehicleComparison.EvidenceText != "对比1和2" ||
+		request.RentalRules == nil ||
+		request.RentalRules.EvidenceText != "押金规则" ||
+		request.Plan.Action(planner.ActionCompareVehicles) == nil ||
+		request.Plan.Action(planner.ActionQueryRentalRules) == nil {
+		t.Fatalf("unexpected request: %#v", request)
 	}
 }
 

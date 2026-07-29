@@ -77,8 +77,48 @@ type TurnResponse struct {
 	Message                string                      `json:"message"`
 	Pending                *PendingView                `json:"pending,omitempty"`
 	Vehicles               []VehicleView               `json:"vehicles"`
+	VehicleComparison      *VehicleComparisonView      `json:"vehicle_comparison,omitempty"`
+	RentalRules            []RentalRuleView            `json:"rental_rules,omitempty"`
 	RequirementResolutions []RequirementResolutionView `json:"requirement_resolutions,omitempty"`
 	State                  StateView                   `json:"state"`
+}
+
+type VehicleComparisonView struct {
+	Status      string                 `json:"status"`
+	Options     []ComparisonOptionView `json:"options,omitempty"`
+	Candidates  []ComparisonOptionView `json:"candidates,omitempty"`
+	Highlights  *ComparisonHighlights  `json:"highlights,omitempty"`
+	Scope       string                 `json:"scope,omitempty"`
+	Limitations []string               `json:"limitations,omitempty"`
+}
+
+type ComparisonOptionView struct {
+	Index                int      `json:"index"`
+	VehicleName          string   `json:"vehicle_name"`
+	BrandName            string   `json:"brand_name,omitempty"`
+	GroupName            string   `json:"group_name,omitempty"`
+	Seats                int      `json:"seats,omitempty"`
+	SupplierName         string   `json:"supplier_name,omitempty"`
+	TotalAmount          *float64 `json:"total_amount,omitempty"`
+	DailyDeductionAmount *float64 `json:"daily_deduction_amount,omitempty"`
+	FuelTypeCode         *int     `json:"fuel_type_code,omitempty"`
+	TransmissionTypeCode *int     `json:"transmission_type_code,omitempty"`
+}
+
+type ComparisonHighlights struct {
+	LowestTotalPriceIndexes []int    `json:"lowest_total_price_indexes,omitempty"`
+	MostSeatsIndexes        []int    `json:"most_seats_indexes,omitempty"`
+	TotalPriceSpread        *float64 `json:"total_price_spread,omitempty"`
+}
+
+type RentalRuleView struct {
+	ID                   string `json:"id"`
+	Category             string `json:"category"`
+	Title                string `json:"title"`
+	Guidance             string `json:"guidance"`
+	Scope                string `json:"scope"`
+	Source               string `json:"source"`
+	VerificationRequired bool   `json:"verification_required"`
 }
 
 type RequirementResolutionView struct {

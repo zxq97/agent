@@ -20,7 +20,9 @@ import (
 	"github.com/zxq97/agent/internal/config"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/httphandler"
 	"github.com/zxq97/agent/internal/llmharness"
@@ -97,7 +99,16 @@ func main() {
 	intentRouter, err := router.NewLLMRouter(llmClient, buildHarnessPolicy(cfg.LLM.Harness, router.LLMTaskID))
 	exitOn(err, "create intent router")
 
-	turnOrchestrator := orchestrator.New(rentalHandler, requirementHandler, searchHandler, searchpolicy.New(1, time.Now), time.Now, generalReplyHandler)
+	turnOrchestrator := orchestrator.NewWithExtensions(
+		rentalHandler,
+		requirementHandler,
+		searchHandler,
+		searchpolicy.New(1, time.Now),
+		time.Now,
+		generalReplyHandler,
+		vehiclecompare.New(),
+		rentalrules.New(nil),
+	)
 	chatService, err := webchat.NewService(turnOrchestrator, intentRouter, webchat.NewMemoryStore(time.Now), time.Now)
 	exitOn(err, "create web chat service")
 	handler, err := httphandler.New(chatService, logger)

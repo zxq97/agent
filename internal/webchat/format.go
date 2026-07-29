@@ -6,7 +6,9 @@ import (
 
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
 	"github.com/zxq97/agent/internal/orchestrator"
 	"github.com/zxq97/agent/internal/session"
 )
@@ -31,6 +33,8 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 		parts = append(parts, "已更新车辆要求。")
 	}
 	vehicles := []VehicleView{}
+	var comparison *VehicleComparisonView
+	var rules []RentalRuleView
 	if turn.SearchCar != nil {
 		result := turn.SearchCar
 		resolutions = requirementResolutionViews(result)
@@ -63,6 +67,14 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 			}
 		}
 	}
+	if turn.VehicleComparison != nil {
+		parts = append(parts, turn.VehicleComparison.Message)
+		comparison = vehicleComparisonView(turn.VehicleComparison)
+	}
+	if turn.RentalRules != nil {
+		parts = append(parts, turn.RentalRules.Message)
+		rules = rentalRuleViews(turn.RentalRules.Rules)
+	}
 	if turn.GeneralReply != nil {
 		parts = append(parts, turn.GeneralReply.Message)
 	}
@@ -83,8 +95,57 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 	}
 	return TurnResponse{
 		Message: strings.Join(nonEmpty(parts), "\n"), Pending: pending,
-		Vehicles: vehicles, RequirementResolutions: resolutions, State: stateView(state),
+		Vehicles: vehicles, VehicleComparison: comparison, RentalRules: rules,
+		RequirementResolutions: resolutions, State: stateView(state),
 	}
+}
+
+func vehicleComparisonView(result *vehiclecompare.Result) *VehicleComparisonView {
+	if result == nil {
+		return nil
+	}
+	view := &VehicleComparisonView{
+		Status:     string(result.Status),
+		Candidates: comparisonOptionViews(result.Candidates),
+	}
+	if result.Comparison == nil {
+		return view
+	}
+	view.Options = comparisonOptionViews(result.Comparison.Options)
+	view.Scope = result.Comparison.Scope
+	view.Limitations = append([]string(nil), result.Comparison.Limitations...)
+	view.Highlights = &ComparisonHighlights{
+		LowestTotalPriceIndexes: append([]int(nil), result.Comparison.Highlights.LowestTotalPriceIndexes...),
+		MostSeatsIndexes:        append([]int(nil), result.Comparison.Highlights.MostSeatsIndexes...),
+		TotalPriceSpread:        result.Comparison.Highlights.TotalPriceSpread,
+	}
+	return view
+}
+
+func comparisonOptionViews(values []vehiclecompare.Option) []ComparisonOptionView {
+	result := make([]ComparisonOptionView, 0, len(values))
+	for _, value := range values {
+		result = append(result, ComparisonOptionView{
+			Index: value.Index, VehicleName: value.VehicleName,
+			BrandName: value.BrandName, GroupName: value.GroupName,
+			Seats: value.Seats, SupplierName: value.SupplierName,
+			TotalAmount: value.TotalAmount, DailyDeductionAmount: value.DailyDeductionAmount,
+			FuelTypeCode: value.FuelTypeCode, TransmissionTypeCode: value.TransmissionTypeCode,
+		})
+	}
+	return result
+}
+
+func rentalRuleViews(values []rentalrules.Rule) []RentalRuleView {
+	result := make([]RentalRuleView, 0, len(values))
+	for _, value := range values {
+		result = append(result, RentalRuleView{
+			ID: value.ID, Category: value.Category, Title: value.Title,
+			Guidance: value.Guidance, Scope: value.Scope, Source: value.Source,
+			VerificationRequired: value.VerificationRequired,
+		})
+	}
+	return result
 }
 
 func requirementResolutionViews(result *searchcar.SearchCarResult) []RequirementResolutionView {

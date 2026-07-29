@@ -7,7 +7,9 @@ import (
 
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/searchpolicy"
 	"github.com/zxq97/agent/internal/session"
@@ -196,5 +198,43 @@ func TestExecuteSendsDomainMismatchTextToGeneralReply(t *testing.T) {
 	}
 	if general.source != "SUV和MPV有什么区别" || result.GeneralReply == nil || result.GeneralReply.Message == "" {
 		t.Fatalf("source=%q result=%#v", general.source, result)
+	}
+}
+
+type recordingComparison struct {
+	evidence string
+}
+
+func (h *recordingComparison) Handle(_ context.Context, _ *session.AgentSession, input *vehiclecompare.Input) (*vehiclecompare.Result, error) {
+	h.evidence = input.EvidenceText
+	return &vehiclecompare.Result{Status: vehiclecompare.StatusSuccess, Message: "compared"}, nil
+}
+
+type recordingRules struct {
+	evidence string
+}
+
+func (h *recordingRules) Handle(_ context.Context, input *rentalrules.Input) (*rentalrules.Result, error) {
+	h.evidence = input.EvidenceText
+	return &rentalrules.Result{Status: rentalrules.StatusSuccess, Message: "rules"}, nil
+}
+
+func TestExecuteRunsComparisonAndRulesHandlers(t *testing.T) {
+	comparison := &recordingComparison{}
+	rules := &recordingRules{}
+	result, err := NewWithExtensions(
+		nil, nil, nil, searchpolicy.New(1, time.Now), time.Now,
+		nil, comparison, rules,
+	).Execute(context.Background(), &session.AgentSession{}, &TurnRequest{
+		SourceText:        "对比1和2，再看押金",
+		VehicleComparison: &vehiclecompare.Input{EvidenceText: "对比1和2"},
+		RentalRules:       &rentalrules.Input{EvidenceText: "押金"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.evidence != "对比1和2" || rules.evidence != "押金" ||
+		result.VehicleComparison == nil || result.RentalRules == nil {
+		t.Fatalf("unexpected result: %#v", result)
 	}
 }
