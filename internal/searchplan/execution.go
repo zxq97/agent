@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strings"
 
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/internal/capability"
@@ -97,16 +98,54 @@ func (c *ExecutionCompiler) Compile(
 		result.Resolutions = append(result.Resolutions, resolution)
 		appendExecutions(&result, resolution.Executions)
 		appendFilterPlanExecutions(&result.FilterPlan, resolution.Executions)
+		decorateExploratoryRanks(&result.FilterPlan, resolution)
 		if resolution.Status != capability.ResolutionResolved {
 			result.Unresolved = append(result.Unresolved, resolution)
 		}
 		result.FilterPlan.Resolutions = append(result.FilterPlan.Resolutions, legacyResolution(resolution))
 	}
-	result.PlanHash = executionPlanHash(result)
+	result.FilterPlan.Disclosures = DisclosuresFromResolutions(result.FilterPlan.Resolutions)
+	for _, disclosure := range ExploratoryDisclosures(result.FilterPlan.ExploratoryRanks) {
+		result.FilterPlan.Disclosures = AddDisclosure(result.FilterPlan.Disclosures, disclosure)
+	}
+	appendRankOnlyHardDisclosures(&result.FilterPlan, result.Resolutions)
 	result.FilterPlan.CapabilityVersion = result.CapabilityVersion
 	result.FilterPlan.RuntimeFingerprint = result.RuntimeFingerprint
+	result.PlanHash = executionPlanHash(result)
 	result.FilterPlan.PlanHash = result.PlanHash
 	return result
+}
+
+func appendRankOnlyHardDisclosures(plan *FilterPlan, values []capability.Resolution) {
+	exploratory := make(map[string]struct{}, len(plan.ExploratoryRanks))
+	for _, rank := range plan.ExploratoryRanks {
+		exploratory[rank.RequirementID] = struct{}{}
+	}
+	for _, value := range values {
+		if value.Importance != "hard" || value.Status != capability.ResolutionPartiallyResolved {
+			continue
+		}
+		if _, exists := exploratory[value.RequirementID]; exists {
+			continue
+		}
+		plan.Disclosures = AddDisclosure(plan.Disclosures, Disclosure{
+			RequirementID: value.RequirementID,
+			RawText:       value.RawText,
+			Kind:          DisclosureHardUnmapped,
+			Message:       "“" + strings.TrimSpace(value.RawText) + "”不能作为严格筛选条件，本次仅用于候选排序，不代表该诉求已满足。",
+			MustMention:   true,
+		})
+	}
+}
+
+func decorateExploratoryRanks(plan *FilterPlan, resolution capability.Resolution) {
+	for index := range plan.ExploratoryRanks {
+		if plan.ExploratoryRanks[index].RequirementID != resolution.RequirementID {
+			continue
+		}
+		plan.ExploratoryRanks[index].RawText = resolution.RawText
+		plan.ExploratoryRanks[index].Importance = resolution.Importance
+	}
 }
 
 func appendFilterPlanExecutions(plan *FilterPlan, values []capability.Execution) {
@@ -119,18 +158,19 @@ func appendFilterPlanExecutions(plan *FilterPlan, values []capability.Execution)
 				Weight:        1,
 				DataField:     "total_charge.total_amount",
 			})
+		case value.Mode == capability.ExecutionLocalRank && strings.HasPrefix(value.Operation, "scenario:"):
+			plan.ExploratoryRanks = append(plan.ExploratoryRanks, ExploratoryRank{
+				RequirementID: value.RequirementID,
+				ScenarioID:    strings.TrimPrefix(value.Operation, "scenario:"),
+				ModelVersion:  strings.TrimPrefix(value.Operation, "scenario:"),
+				Weight:        1,
+			})
 		}
 	}
 }
 
 func (p SearchExecutionPlan) FirstBlockingResolution() *capability.Resolution {
-	for index := range p.Resolutions {
-		value := &p.Resolutions[index]
-		if value.Importance != "hard" || value.Status == capability.ResolutionResolved {
-			continue
-		}
-		return value
-	}
+	// Capability limitations are reply obligations, not search blockers.
 	return nil
 }
 
@@ -181,13 +221,20 @@ func resolutionFromLegacy(value Resolution) capability.Resolution {
 
 func legacyResolution(value capability.Resolution) Resolution {
 	resolutionCapability := CapabilityUnsupported
+	for _, execution := range value.Executions {
+		if execution.Mode == capability.ExecutionLocalRank {
+			resolutionCapability = CapabilityRankable
+		}
+	}
 	switch value.Status {
 	case capability.ResolutionAmbiguous:
 		resolutionCapability = CapabilityAmbiguous
 	case capability.ResolutionInsufficientData:
 		resolutionCapability = CapabilityUnverifiable
 	case capability.ResolutionPartiallyResolved:
-		resolutionCapability = CapabilityAdvisory
+		if resolutionCapability != CapabilityRankable {
+			resolutionCapability = CapabilityAdvisory
+		}
 	case capability.ResolutionResolved:
 		for _, execution := range value.Executions {
 			switch execution.Mode {

@@ -3,12 +3,15 @@ package llm
 import "context"
 
 const (
-	// ModelConversation is the default DeepSeek model for standard conversation
-	// and function calling.
-	ModelConversation = "deepseek-chat"
-	// ModelReasoning is the stronger reasoning model for complex analysis that
-	// does not require function calling.
-	ModelReasoning = "deepseek-reasoner"
+	// ModelFlash is the low-latency DeepSeek V4 model used by routine tasks.
+	ModelFlash = "deepseek-v4-flash"
+	// ModelPro is the stronger DeepSeek V4 model used by complex semantic tasks.
+	ModelPro = "deepseek-v4-pro"
+
+	// ModelConversation is kept as a source-compatible alias.
+	ModelConversation = ModelFlash
+	// ModelReasoning is kept as a source-compatible alias.
+	ModelReasoning = ModelPro
 )
 
 // Client is the model-independent LLM API used by agent orchestration.

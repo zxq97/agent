@@ -9,9 +9,17 @@ import (
 
 // Config is the repository configuration root.
 type Config struct {
-	Guide GuideConfig `yaml:"guide"`
-	Maps  MapsConfig  `yaml:"maps"`
-	LLM   LLMConfig   `yaml:"llm"`
+	Guide    GuideConfig    `yaml:"guide"`
+	Maps     MapsConfig     `yaml:"maps"`
+	LLM      LLMConfig      `yaml:"llm"`
+	AgentHub AgentHubConfig `yaml:"agenthub"`
+}
+
+type AgentHubConfig struct {
+	Endpoint   string `yaml:"endpoint"`
+	Path       string `yaml:"path"`
+	APIKey     string `yaml:"api_key"`
+	TimeoutSec int    `yaml:"timeout_sec"`
 }
 
 type LLMConfig struct {

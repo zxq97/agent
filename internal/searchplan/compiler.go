@@ -4,17 +4,31 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/internal/vehiclecatalog"
 )
 
-type Compiler struct{}
+type Compiler struct {
+	entities *vehiclecatalog.StaticCatalog
+}
 
 func NewCompiler() *Compiler {
-	return &Compiler{}
+	return NewCompilerWithVehicleCatalog(vehiclecatalog.NewDefaultCatalog())
+}
+
+// NewCompilerWithVehicleCatalog builds a compiler with the authoritative
+// catalog used to construct and verify vehicle-entity filters.
+func NewCompilerWithVehicleCatalog(entities *vehiclecatalog.StaticCatalog) *Compiler {
+	if entities == nil {
+		entities = vehiclecatalog.NewDefaultCatalog()
+	}
+	return &Compiler{entities: entities}
 }
 
 func (c *Compiler) Compile(requirements []Requirement, menu []guide.MenuGroup) FilterPlan {
@@ -34,9 +48,10 @@ func (c *Compiler) Compile(requirements []Requirement, menu []guide.MenuGroup) F
 			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityAdvisory, "redundant_parent", "更具体的车辆实体已覆盖父级条件"))
 			continue
 		}
-		compileRequirement(&plan, requirement, index)
+		compileRequirement(&plan, requirement, index, c.entities)
 	}
 	plan.MenuFilters = uniqueMenuFilters(plan.MenuFilters)
+	plan.Disclosures = DisclosuresFromResolutions(plan.Resolutions)
 	plan.PlanHash = planHash(plan)
 	return plan
 }
@@ -173,12 +188,16 @@ func facetForCode(code string) string {
 		return "vehicle_type"
 	case strings.HasPrefix(code, "filter/total_fee/"), strings.HasPrefix(code, "filter/price/"):
 		return "price_preference"
+	case strings.HasPrefix(code, "filter/brand/"):
+		return "brand"
+	case strings.HasPrefix(code, "filter/vehicle_name/"), strings.HasPrefix(code, "filter/model/"):
+		return "vehicle_model"
 	default:
 		return ""
 	}
 }
 
-func compileRequirement(plan *FilterPlan, requirement Requirement, index menuIndex) {
+func compileRequirement(plan *FilterPlan, requirement Requirement, index menuIndex, entities *vehiclecatalog.StaticCatalog) {
 	if requirement.EntityResolution == "ambiguous" {
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityAmbiguous, "vehicle_entity_ambiguous", "车辆名称存在多个候选"))
 		return
@@ -197,7 +216,7 @@ func compileRequirement(plan *FilterPlan, requirement Requirement, index menuInd
 	case "price_preference":
 		compilePrice(plan, requirement, index)
 	case "brand", "vehicle_series", "vehicle_model":
-		compileVehicleEntity(plan, requirement)
+		compileVehicleEntity(plan, requirement, entities)
 	case "comfort_preference":
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "missing_comfort_data", "Guide 当前没有可验证的舒适性字段"))
 	case "custom":
@@ -218,25 +237,91 @@ func compileSeat(plan *FilterPlan, requirement Requirement, index menuIndex) {
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityRankable, "quote_rank", "按 Guide 返回的座位数字段在当前候选集中排序"))
 		return
 	}
-	if requirement.Operator == "eq" {
-		name := strconv.Itoa(value) + "座"
-		if item, ok := index.find("seat_num", name); ok {
-			addMenuFilter(plan, requirement, item)
-			return
-		}
-	}
-	if requirement.Operator == "gte" && value >= 8 {
-		if item, ok := index.find("seat_num", "8座及以上"); ok {
-			addMenuFilter(plan, requirement, item)
-			return
-		}
-	}
-	if isNumericOperator(requirement.Operator) {
-		plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{RequirementID: requirement.ID, Facet: requirement.Facet, Operator: requirement.Operator, Value: strconv.Itoa(value)})
-		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "quote_filter", "使用 Guide 返回的座位数字段验证当前候选集"))
+	if item, prefilter, ok := index.findSeat(value, requirement.Operator); ok {
+		addMenuFilterWithMode(plan, requirement, item, prefilter)
+		plan.LocalVerifiers = append(plan.LocalVerifiers, LocalVerifier{
+			RequirementID: requirement.ID,
+			Facet:         "seat_num",
+			Operator:      requirement.Operator,
+			Value:         strconv.Itoa(value),
+		})
 		return
 	}
-	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnsupported, "seat_operator_not_supported", "当前无法执行该座位数比较方式"))
+	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "seat_filter_not_found", "当前 Guide 座位数菜单无法无损表达该条件"))
+}
+
+func (i menuIndex) findSeat(value int, operator string) (indexedMenuItem, bool, bool) {
+	var prefilter indexedMenuItem
+	bestDistance := int(^uint(0) >> 1)
+	for _, item := range i.byFacet["seat_num"] {
+		code := strings.ToLower(item.code)
+		name := strings.ToLower(item.name)
+		numbers := numericParts(code + " " + name)
+		if !containsNumber(numbers, float64(value)) {
+			if candidate, distance, ok := seatPrefilter(item, value, operator); ok && distance < bestDistance {
+				prefilter = candidate
+				bestDistance = distance
+			}
+			continue
+		}
+		switch operator {
+		case "eq":
+			if strings.Contains(code, "/ge_") ||
+				strings.Contains(code, "/gte_") ||
+				hasMultipleDistinctNumbers(code) ||
+				strings.Contains(name, "以上") ||
+				strings.Contains(name, "-") ||
+				strings.Contains(name, "至") {
+				if candidate, distance, ok := seatPrefilter(item, value, operator); ok && distance < bestDistance {
+					prefilter = candidate
+					bestDistance = distance
+				}
+				continue
+			}
+			return item, false, true
+		case "gte":
+			if strings.Contains(code, "/ge_") ||
+				strings.Contains(code, "/gte_") ||
+				strings.Contains(name, "以上") {
+				return item, false, true
+			}
+		}
+	}
+	if prefilter.code != "" {
+		return prefilter, true, true
+	}
+	return indexedMenuItem{}, false, false
+}
+
+func seatPrefilter(item indexedMenuItem, target int, operator string) (indexedMenuItem, int, bool) {
+	code := strings.ToLower(item.code)
+	name := strings.ToLower(item.name)
+	numbers := distinctNumbers(code + " " + name)
+	switch operator {
+	case "eq":
+		if len(numbers) >= 2 {
+			minimum, maximum := numbers[0], numbers[len(numbers)-1]
+			if float64(target) >= minimum && float64(target) <= maximum {
+				return item, int(maximum-minimum) + 1, true
+			}
+		}
+		if len(numbers) == 1 &&
+			(strings.Contains(code, "/ge_") ||
+				strings.Contains(code, "/gte_") ||
+				strings.Contains(name, "以上")) &&
+			numbers[0] <= float64(target) {
+			return item, target - int(numbers[0]) + 100, true
+		}
+	case "gte":
+		if len(numbers) == 1 &&
+			(strings.Contains(code, "/ge_") ||
+				strings.Contains(code, "/gte_") ||
+				strings.Contains(name, "以上")) &&
+			numbers[0] < float64(target) {
+			return item, target - int(numbers[0]), true
+		}
+	}
+	return indexedMenuItem{}, 0, false
 }
 
 func compileNamedMenu(plan *FilterPlan, requirement Requirement, index menuIndex, aliases map[string]string) {
@@ -295,70 +380,253 @@ func compilePrice(plan *FilterPlan, requirement Requirement, index menuIndex) {
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityRankable, "quote_rank", "按 Guide 返回的总价在当前候选集中排序"))
 		return
 	}
-	targetName := ""
-	switch value {
-	case "total<=300cny":
-		targetName = "￥300以下"
-	case "daily<=100cny":
-		targetName = "￥100以下"
-	}
-	if targetName != "" {
-		if item, ok := index.find("price_preference", targetName); ok {
-			addMenuFilter(plan, requirement, item)
+	if requirement.Importance == "hard" {
+		if item, constraint, prefilter, ok := index.findPrice(requirement); ok {
+			addMenuFilterWithMode(plan, requirement, item, prefilter)
+			plan.LocalVerifiers = append(plan.LocalVerifiers, priceVerifier(requirement.ID, constraint))
 			return
 		}
 	}
-	if requirement.Importance == "hard" && addTotalPriceFilters(plan, requirement) {
-		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "quote_filter", "使用 Guide 返回的订单总价验证当前候选集"))
-		return
-	}
-	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "price_range_not_supported", "当前菜单无法无损表达该预算范围"))
+	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "price_range_not_supported", "当前 Guide 价格菜单无法无损表达该预算范围"))
 }
 
-func addTotalPriceFilters(plan *FilterPlan, value Requirement) bool {
-	unit := strings.ToLower(strings.TrimSpace(value.Value.Unit))
-	if unit != "" && unit != "cny" && unit != "total_cny" {
-		return false
+type priceConstraint struct {
+	scope    string
+	operator string
+	min      *float64
+	max      *float64
+}
+
+func (i menuIndex) findPrice(requirement Requirement) (indexedMenuItem, priceConstraint, bool, bool) {
+	constraint, ok := priceConstraintFromRequirement(requirement)
+	if !ok {
+		return indexedMenuItem{}, priceConstraint{}, false, false
 	}
+	for _, item := range i.byFacet["price_preference"] {
+		if priceItemMatches(item, constraint) {
+			return item, constraint, false, true
+		}
+	}
+	if item, ok := i.findPricePrefilter(constraint); ok {
+		return item, constraint, true, true
+	}
+	return indexedMenuItem{}, priceConstraint{}, false, false
+}
+
+func (i menuIndex) findPricePrefilter(constraint priceConstraint) (indexedMenuItem, bool) {
+	var selected indexedMenuItem
+	bestDistance := math.MaxFloat64
+	for _, item := range i.byFacet["price_preference"] {
+		code := strings.ToLower(item.code)
+		name := strings.ToLower(item.name)
+		if constraint.scope == "total" && !strings.HasPrefix(code, "filter/total_fee/") {
+			continue
+		}
+		if constraint.scope == "daily" && !strings.HasPrefix(code, "filter/price/") {
+			continue
+		}
+		numbers := distinctNumbers(code + " " + name)
+		if len(numbers) != 1 {
+			continue
+		}
+		boundary := numbers[0]
+		switch constraint.operator {
+		case "lt", "lte":
+			if constraint.max == nil || boundary < *constraint.max ||
+				(!strings.Contains(code, "/le_") &&
+					!strings.Contains(code, "/lte_") &&
+					!strings.Contains(name, "以下") &&
+					!strings.Contains(name, "以内")) {
+				continue
+			}
+			if distance := boundary - *constraint.max; distance < bestDistance {
+				selected = item
+				bestDistance = distance
+			}
+		case "gt", "gte":
+			if constraint.min == nil || boundary > *constraint.min ||
+				(!strings.Contains(code, "/ge_") &&
+					!strings.Contains(code, "/gte_") &&
+					!strings.Contains(name, "以上")) {
+				continue
+			}
+			if distance := *constraint.min - boundary; distance < bestDistance {
+				selected = item
+				bestDistance = distance
+			}
+		}
+	}
+	return selected, selected.code != ""
+}
+
+func priceVerifier(requirementID string, constraint priceConstraint) LocalVerifier {
+	facet := "price_total"
+	if constraint.scope == "daily" {
+		facet = "price_daily"
+	}
+	verifier := LocalVerifier{
+		RequirementID: requirementID,
+		Facet:         facet,
+		Operator:      constraint.operator,
+	}
+	if constraint.min != nil {
+		verifier.MinValue = strconv.FormatFloat(*constraint.min, 'f', -1, 64)
+	}
+	if constraint.max != nil {
+		verifier.MaxValue = strconv.FormatFloat(*constraint.max, 'f', -1, 64)
+	}
+	switch constraint.operator {
+	case "lt", "lte", "eq":
+		verifier.Value = verifier.MaxValue
+	case "gt", "gte":
+		verifier.Value = verifier.MinValue
+	}
+	return verifier
+}
+
+func priceConstraintFromRequirement(value Requirement) (priceConstraint, bool) {
+	unit := strings.ToLower(strings.TrimSpace(value.Value.Unit))
+	scope := "total"
+	if unit == "daily_cny" || strings.HasPrefix(strings.ToLower(value.CanonicalValue), "daily") {
+		scope = "daily"
+	}
+	constraint := priceConstraint{scope: scope, operator: value.Operator}
 	switch value.Value.Kind {
 	case "number":
 		if value.Value.Number == nil || !isNumericOperator(value.Operator) {
-			return false
+			return priceConstraint{}, false
 		}
-		plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{
-			RequirementID: value.ID, Facet: "price_total", Operator: value.Operator,
-			Value: strconv.FormatFloat(*value.Value.Number, 'f', -1, 64),
-		})
-		return true
+		number := *value.Value.Number
+		switch value.Operator {
+		case "lt", "lte", "eq":
+			constraint.max = &number
+		case "gt", "gte":
+			constraint.min = &number
+		default:
+			return priceConstraint{}, false
+		}
+		return constraint, true
 	case "range":
 		if value.Value.Range == nil {
+			return priceConstraint{}, false
+		}
+		constraint.operator = "range"
+		constraint.min = value.Value.Range.Min
+		constraint.max = value.Value.Range.Max
+		return constraint, constraint.min != nil || constraint.max != nil
+	}
+
+	numbers := numericParts(value.CanonicalValue)
+	if len(numbers) != 1 {
+		return priceConstraint{}, false
+	}
+	number := numbers[0]
+	switch {
+	case strings.Contains(value.CanonicalValue, "<="), strings.Contains(value.CanonicalValue, "≤"):
+		constraint.operator = "lte"
+		constraint.max = &number
+	case strings.Contains(value.CanonicalValue, ">="), strings.Contains(value.CanonicalValue, "≥"):
+		constraint.operator = "gte"
+		constraint.min = &number
+	default:
+		return priceConstraint{}, false
+	}
+	return constraint, true
+}
+
+func priceItemMatches(item indexedMenuItem, constraint priceConstraint) bool {
+	code := strings.ToLower(item.code)
+	name := strings.ToLower(item.name)
+	if constraint.scope == "total" && !strings.HasPrefix(code, "filter/total_fee/") {
+		return false
+	}
+	if constraint.scope == "daily" && !strings.HasPrefix(code, "filter/price/") {
+		return false
+	}
+	numbers := numericParts(code + " " + name)
+	switch constraint.operator {
+	case "lte":
+		return constraint.max != nil &&
+			containsNumber(numbers, *constraint.max) &&
+			(strings.Contains(code, "/le_") ||
+				strings.Contains(code, "/lte_") ||
+				strings.Contains(name, "以下") ||
+				strings.Contains(name, "以内"))
+	case "gte":
+		return constraint.min != nil &&
+			containsNumber(numbers, *constraint.min) &&
+			(strings.Contains(code, "/ge_") ||
+				strings.Contains(code, "/gte_") ||
+				strings.Contains(name, "以上"))
+	case "eq":
+		return constraint.max != nil &&
+			containsNumber(numbers, *constraint.max) &&
+			!strings.Contains(name, "以下") &&
+			!strings.Contains(name, "以内") &&
+			!strings.Contains(name, "以上") &&
+			len(numbers) <= 2
+	case "range":
+		if constraint.min == nil || constraint.max == nil {
 			return false
 		}
-		if value.Value.Range.Min != nil {
-			plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{
-				RequirementID: value.ID, Facet: "price_total", Operator: "gte",
-				Value: strconv.FormatFloat(*value.Value.Range.Min, 'f', -1, 64),
-			})
-		}
-		if value.Value.Range.Max != nil {
-			plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{
-				RequirementID: value.ID, Facet: "price_total", Operator: "lte",
-				Value: strconv.FormatFloat(*value.Value.Range.Max, 'f', -1, 64),
-			})
-		}
-		return value.Value.Range.Min != nil || value.Value.Range.Max != nil
+		return containsNumber(numbers, *constraint.min) &&
+			containsNumber(numbers, *constraint.max) &&
+			(strings.Contains(code, "_") ||
+				strings.Contains(name, "-") ||
+				strings.Contains(name, "至"))
 	default:
 		return false
 	}
 }
 
-func compileVehicleEntity(plan *FilterPlan, requirement Requirement) {
-	value := strings.TrimSpace(requirement.CanonicalValue)
-	if value == "" {
-		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_entity_empty", "车辆实体名称为空"))
-		return
+var numberPattern = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
+
+func numericParts(value string) []float64 {
+	matches := numberPattern.FindAllString(value, -1)
+	result := make([]float64, 0, len(matches))
+	for _, match := range matches {
+		number, err := strconv.ParseFloat(match, 64)
+		if err == nil {
+			result = append(result, number)
+		}
 	}
+	return result
+}
+
+func containsNumber(values []float64, target float64) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func distinctNumbers(value string) []float64 {
+	seen := make(map[float64]struct{})
+	var result []float64
+	for _, number := range numericParts(value) {
+		if _, exists := seen[number]; exists {
+			continue
+		}
+		seen[number] = struct{}{}
+		result = append(result, number)
+	}
+	sort.Float64s(result)
+	return result
+}
+
+func hasMultipleDistinctNumbers(value string) bool {
+	return len(distinctNumbers(value)) > 1
+}
+
+func compileVehicleEntity(plan *FilterPlan, requirement Requirement, entities *vehiclecatalog.StaticCatalog) {
 	if requirement.Importance == "soft" {
+		value := strings.TrimSpace(requirement.CanonicalValue)
+		if value == "" {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_entity_empty", "车辆实体名称为空"))
+			return
+		}
 		factorType := RankPreferredModel
 		field := "vehicle.vehicle_name"
 		if requirement.Facet == "brand" {
@@ -369,18 +637,150 @@ func compileVehicleEntity(plan *FilterPlan, requirement Requirement) {
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityRankable, "quote_rank", "使用 Guide 返回的车辆名称字段在当前候选集中排序"))
 		return
 	}
-	operator := requirement.Operator
-	if operator != "eq" && operator != "not_eq" && operator != "contains" {
-		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnsupported, "vehicle_entity_operator_not_supported", "当前车辆字段不支持该比较方式"))
+	if requirement.Operator != "eq" && requirement.Operator != "in" {
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnsupported, "vehicle_entity_operator_not_supported", "Guide 车辆实体筛选当前只支持正向等值条件"))
 		return
 	}
-	plan.QuoteFilters = append(plan.QuoteFilters, QuoteFilter{RequirementID: requirement.ID, Facet: requirement.Facet, Operator: operator, Value: value})
-	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "fetched_set_quote_filter", "Guide 没有品牌/车型菜单，使用返回车辆字段验证当前候选集"))
+	if strings.TrimSpace(requirement.EntityID) == "" {
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_entity_not_cataloged", "车辆实体未经过车型库确认，不能生成 Guide FilterCode"))
+		return
+	}
+	entity, ok := entities.EntityByID(requirement.EntityID)
+	if !ok || entity.Type != catalogTypeForFacet(requirement.Facet) {
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_entity_catalog_mismatch", "车型库中不存在与诉求类型一致的车辆实体"))
+		return
+	}
+
+	value := strings.TrimSpace(entity.CanonicalName)
+	brandName := catalogEntityName(entities, entity.BrandID)
+	expectedNames := []string{value}
+	if requirement.Facet == "vehicle_series" {
+		expectedNames = nil
+		filterCount := len(plan.MenuFilters)
+		models := entities.ModelsBySeries(entity.ID)
+		if len(models) == 0 {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "series_expansion_empty", "车型库中没有可用于 Guide 筛选的车系车型"))
+			return
+		}
+		for _, model := range models {
+			providerNames := entities.ProviderNames(model.ID, "guide")
+			for _, providerName := range providerNames {
+				plan.MenuFilters = append(plan.MenuFilters, MenuFilter{
+					RequirementID: requirement.ID,
+					Code:          "filter/vehicle_name/" + providerName,
+					Name:          providerName,
+				})
+				expectedNames = append(expectedNames, model.CanonicalName, providerName)
+			}
+		}
+		if len(plan.MenuFilters) == filterCount {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "series_provider_binding_empty", "车型库车系下没有经过确认的 Guide Provider Binding"))
+			return
+		}
+	} else {
+		providerNames := entities.ProviderNames(entity.ID, "guide")
+		if len(providerNames) == 0 {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_provider_binding_empty", "车型库实体没有经过确认的 Guide Provider Binding"))
+			return
+		}
+		codePrefix := "filter/brand/"
+		if requirement.Facet == "vehicle_model" {
+			codePrefix = "filter/vehicle_name/"
+		}
+		for _, providerName := range providerNames {
+			plan.MenuFilters = append(plan.MenuFilters, MenuFilter{
+				RequirementID: requirement.ID,
+				Code:          codePrefix + providerName,
+				Name:          providerName,
+			})
+			expectedNames = append(expectedNames, providerName)
+		}
+	}
+	plan.Resolutions = append(plan.Resolutions, resolution(
+		requirement,
+		CapabilityFilterable,
+		"vehicle_catalog_filter",
+		"车辆实体已由车型库归一并映射为 Guide FilterCode，返回结果将进行本地实体校验",
+	))
+
+	plan.LocalVerifiers = append(plan.LocalVerifiers, LocalVerifier{
+		RequirementID: requirement.ID,
+		Facet:         requirement.Facet,
+		EntityID:      entity.ID,
+		ExpectedBrand: brandName,
+		ExpectedNames: uniqueStrings(expectedNames),
+	})
+}
+
+func catalogTypeForFacet(facet string) vehiclecatalog.EntityType {
+	switch facet {
+	case "brand":
+		return vehiclecatalog.EntityBrand
+	case "vehicle_series":
+		return vehiclecatalog.EntitySeries
+	case "vehicle_model":
+		return vehiclecatalog.EntityModel
+	default:
+		return ""
+	}
+}
+
+func catalogEntityName(entities *vehiclecatalog.StaticCatalog, entityID string) string {
+	if entities == nil {
+		return ""
+	}
+	entity, ok := entities.EntityByID(entityID)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(entity.CanonicalName)
+}
+
+func qualifyVehicleName(name, brand string) string {
+	name = strings.TrimSpace(name)
+	brand = strings.TrimSpace(brand)
+	if brand == "" || strings.Contains(normalizeQuoteText(name), normalizeQuoteText(brand)) {
+		return name
+	}
+	return brand + name
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		key := normalizeQuoteText(value)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func addMenuFilter(plan *FilterPlan, requirement Requirement, item indexedMenuItem) {
-	plan.MenuFilters = append(plan.MenuFilters, MenuFilter{RequirementID: requirement.ID, Code: item.code, Name: item.name})
-	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityFilterable, "menu_filter", "已匹配当前无筛选菜单"))
+	addMenuFilterWithMode(plan, requirement, item, false)
+}
+
+func addMenuFilterWithMode(plan *FilterPlan, requirement Requirement, item indexedMenuItem, prefilter bool) {
+	plan.MenuFilters = append(plan.MenuFilters, MenuFilter{
+		RequirementID: requirement.ID,
+		Code:          item.code,
+		Name:          item.name,
+		Prefilter:     prefilter,
+	})
+	reasonCode := "menu_filter"
+	reason := "已匹配当前无筛选菜单"
+	if prefilter {
+		reasonCode = "menu_prefilter"
+		reason = "已使用不漏召回的 Guide 条件预筛，并将按真实返回字段严格验证"
+	}
+	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityFilterable, reasonCode, reason))
 }
 
 func resolution(requirement Requirement, capability Capability, reasonCode, reason string) Resolution {
@@ -464,16 +864,22 @@ func uniqueMenuFilters(values []MenuFilter) []MenuFilter {
 
 func planHash(plan FilterPlan) string {
 	type hashInput struct {
-		MenuFilters  []MenuFilter
-		ServerSort   string
-		QuoteFilters []QuoteFilter
-		RankFactors  []RankFactor
+		MenuFilters           []MenuFilter
+		ServerSort            string
+		QuoteFilters          []QuoteFilter
+		LocalVerifiers        []LocalVerifier
+		RankFactors           []RankFactor
+		ExploratoryRanks      []ExploratoryRank
+		RelaxedRequirementIDs []string
 	}
 	input := hashInput{
-		MenuFilters:  append([]MenuFilter(nil), plan.MenuFilters...),
-		ServerSort:   plan.ServerSort,
-		QuoteFilters: append([]QuoteFilter(nil), plan.QuoteFilters...),
-		RankFactors:  append([]RankFactor(nil), plan.RankFactors...),
+		MenuFilters:           append([]MenuFilter(nil), plan.MenuFilters...),
+		ServerSort:            plan.ServerSort,
+		QuoteFilters:          append([]QuoteFilter(nil), plan.QuoteFilters...),
+		LocalVerifiers:        append([]LocalVerifier(nil), plan.LocalVerifiers...),
+		RankFactors:           append([]RankFactor(nil), plan.RankFactors...),
+		ExploratoryRanks:      append([]ExploratoryRank(nil), plan.ExploratoryRanks...),
+		RelaxedRequirementIDs: append([]string(nil), plan.RelaxedRequirementIDs...),
 	}
 	sort.Slice(input.MenuFilters, func(i, j int) bool { return input.MenuFilters[i].Code < input.MenuFilters[j].Code })
 	sort.Slice(input.QuoteFilters, func(i, j int) bool {
@@ -482,6 +888,10 @@ func planHash(plan FilterPlan) string {
 		}
 		return input.QuoteFilters[i].RequirementID < input.QuoteFilters[j].RequirementID
 	})
+	sort.Slice(input.LocalVerifiers, func(i, j int) bool {
+		return input.LocalVerifiers[i].RequirementID < input.LocalVerifiers[j].RequirementID
+	})
+	sort.Strings(input.RelaxedRequirementIDs)
 	data, _ := json.Marshal(input)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:12])

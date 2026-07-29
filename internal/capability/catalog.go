@@ -6,7 +6,7 @@ import (
 	"github.com/zxq97/agent/internal/requirement"
 )
 
-const DefaultCatalogVersion = "capability-v1"
+const DefaultCatalogVersion = "capability-v2"
 
 type ExecutionDefinition struct {
 	RequiredFields []string
@@ -72,11 +72,19 @@ func NewDefaultCatalog() *Catalog {
 			Categories: []requirement.Category{requirement.CategoryUsageScenario},
 			Aliases:    []string{"elderly_friendly", "适合老人", "老人出行"},
 			Examples:   []string{"适合带老人出行"},
+			LocalRank: &ExecutionDefinition{
+				RequiredFields: []string{"vehicle.seats"},
+				Operation:      "scenario:elderly_friendly_v1",
+			},
 		},
 		{
 			ID: "family_trip", Name: "家庭出行", Description: "家庭多人出行的综合场景",
 			Categories: []requirement.Category{requirement.CategoryUsageScenario},
 			Aliases:    []string{"family_trip", "家庭出行", "一家人出行"},
+			LocalRank: &ExecutionDefinition{
+				RequiredFields: []string{"vehicle.seats"},
+				Operation:      "scenario:family_trip_v1",
+			},
 		},
 		{
 			ID: "beginner_friendly", Name: "新手友好", Description: "适合驾驶经验较少用户的综合场景",
@@ -87,11 +95,19 @@ func NewDefaultCatalog() *Catalog {
 			ID: "large_space", Name: "空间大", Description: "乘坐或装载空间较大的车辆",
 			Categories: []requirement.Category{requirement.CategoryPreference, requirement.CategoryUsageScenario},
 			Aliases:    []string{"large_space", "空间大", "后排宽敞"},
+			LocalRank: &ExecutionDefinition{
+				RequiredFields: []string{"vehicle.seats"},
+				Operation:      "scenario:large_space_v1",
+			},
 		},
 		{
 			ID: "long_distance", Name: "长途出行", Description: "适合长距离行程的综合场景",
 			Categories: []requirement.Category{requirement.CategoryUsageScenario},
 			Aliases:    []string{"long_distance", "长途", "长距离出行"},
+			LocalRank: &ExecutionDefinition{
+				RequiredFields: []string{"vehicle.group_name"},
+				Operation:      "scenario:long_distance_v1",
+			},
 		},
 		{
 			ID: "winter_driving", Name: "冬季驾驶", Description: "适合冬季驾驶的综合场景",
@@ -102,6 +118,10 @@ func NewDefaultCatalog() *Catalog {
 			ID: "large_luggage", Name: "大件行李", Description: "需要可靠容纳较多或大件行李",
 			Categories: []requirement.Category{requirement.CategoryUsageScenario},
 			Aliases:    []string{"large_luggage", "大件行李", "行李多"},
+			LocalRank: &ExecutionDefinition{
+				RequiredFields: []string{"vehicle.seats"},
+				Operation:      "scenario:large_luggage_v1",
+			},
 		},
 	})
 }

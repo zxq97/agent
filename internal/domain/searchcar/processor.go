@@ -3,28 +3,32 @@ package searchcar
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/internal/localrank"
 	"github.com/zxq97/agent/internal/searchplan"
 	"github.com/zxq97/agent/internal/searchruntime"
 	"github.com/zxq97/agent/internal/session"
 )
 
 type resultProcessor interface {
-	Filter([]guide.VehRate, searchplan.FilterPlan) []guide.VehRate
-	Rank([]guide.VehRate, searchplan.FilterPlan) []guide.VehRate
+	Filter([]guide.VehRate, searchplan.FilterPlan) ([]guide.VehRate, searchplan.VerificationReport)
+	Rank([]guide.VehRate, searchplan.FilterPlan) ([]guide.VehRate, localrank.Report)
 }
 
 type quoteResultProcessor struct{}
 
-func (quoteResultProcessor) Filter(values []guide.VehRate, plan searchplan.FilterPlan) []guide.VehRate {
-	return searchplan.ApplyQuoteFilters(values, plan.QuoteFilters)
+func (quoteResultProcessor) Filter(values []guide.VehRate, plan searchplan.FilterPlan) ([]guide.VehRate, searchplan.VerificationReport) {
+	filtered := searchplan.ApplyQuoteFilters(values, plan.QuoteFilters)
+	return searchplan.ApplyLocalVerifiers(filtered, plan.LocalVerifiers)
 }
 
-func (quoteResultProcessor) Rank(values []guide.VehRate, plan searchplan.FilterPlan) []guide.VehRate {
-	return searchplan.Rerank(values, plan.RankFactors)
+func (quoteResultProcessor) Rank(values []guide.VehRate, plan searchplan.FilterPlan) ([]guide.VehRate, localrank.Report) {
+	ranked := searchplan.Rerank(values, plan.RankFactors)
+	return localrank.Rank(ranked, plan.ExploratoryRanks)
 }
 
 func (h *SearchCarHandler) finishSearch(
@@ -38,11 +42,14 @@ func (h *SearchCarHandler) finishSearch(
 ) (*SearchCarResult, error) {
 	agentSession.Search.DirtyReason = ""
 	rawCount := len(response.VehRates)
-	vehicles := h.processor.Filter(response.VehRates, plan)
+	vehicles, verificationReport := h.processor.Filter(response.VehRates, plan)
 	lastResponse := response
 	lastPage := requestPage
 
-	for len(vehicles) == 0 && len(plan.QuoteFilters) > 0 && rawCount > 0 && lastPage < requestPage+maxQuoteScanPages-1 {
+	for len(vehicles) == 0 &&
+		(len(plan.QuoteFilters) > 0 || len(plan.LocalVerifiers) > 0) &&
+		rawCount > 0 &&
+		lastPage < requestPage+maxQuoteScanPages-1 {
 		lastPage++
 		next, err := h.executor.Execute(ctx, buildRequest(
 			agentSession.Search,
@@ -60,13 +67,18 @@ func (h *SearchCarHandler) finishSearch(
 		}
 		lastResponse = next
 		rawCount += len(next.VehRates)
-		vehicles = h.processor.Filter(next.VehRates, plan)
+		var nextReport searchplan.VerificationReport
+		vehicles, nextReport = h.processor.Filter(next.VehRates, plan)
+		verificationReport = mergeVerificationReports(verificationReport, nextReport)
 		if len(next.VehRates) == 0 {
 			break
 		}
 	}
 
-	vehicles = h.processor.Rank(vehicles, plan)
+	applyVerificationReport(&plan, verificationReport)
+	var rankingReport localrank.Report
+	vehicles, rankingReport = h.processor.Rank(vehicles, plan)
+	applyExploratoryRankingReport(&plan, rankingReport)
 	if fresh || agentSession.Search.ActiveSearch == nil {
 		agentSession.Search.ActiveSearch = &session.ActiveSearchSnapshot{
 			SearchID:              fmt.Sprintf("search-%d", now.UnixNano()),
@@ -75,6 +87,7 @@ func (h *SearchCarHandler) finishSearch(
 			FilterPlanHash:        plan.PlanHash,
 			CapabilityVersion:     plan.CapabilityVersion,
 			RuntimeFingerprint:    plan.RuntimeFingerprint,
+			RelaxedRequirementIDs: append([]string(nil), plan.RelaxedRequirementIDs...),
 			BaselineContextID:     agentSession.Search.Baseline.ContextID,
 			ContinuationContextID: lastResponse.ContextID,
 			PageSize:              pageSize,
@@ -95,10 +108,13 @@ func (h *SearchCarHandler) finishSearch(
 		if rawCount == 0 {
 			snapshot.Status = session.SearchSnapshotExhausted
 			h.saveResults(agentSession, nil)
-			return resultFromPlan(ResultNoResults, plan, nil, lastResponse.ContextID, lastPage), nil
+			result := resultFromPlan(ResultNoResults, plan, nil, lastResponse.ContextID, lastPage)
+			result.VerificationReport = verificationReport
+			return result, nil
 		}
 		h.saveResults(agentSession, nil)
 		result := resultFromPlan(ResultCapabilityLimit, plan, nil, lastResponse.ContextID, lastPage)
+		result.VerificationReport = verificationReport
 		result.Message = "当前已获取的候选车辆中没有能够验证全部硬条件的结果；系统没有把未验证条件当作已满足。"
 		return result, nil
 	}
@@ -116,10 +132,54 @@ func (h *SearchCarHandler) finishSearch(
 		status = ResultPartial
 	}
 	result := resultFromPlan(status, plan, vehicles, lastResponse.ContextID, lastPage)
-	if len(plan.RankFactors) > 0 && plan.ServerSort == "" {
+	result.VerificationReport = verificationReport
+	if (len(plan.RankFactors) > 0 || len(plan.ExploratoryRanks) > 0) && plan.ServerSort == "" {
 		result.RankingScope = "fetched_set"
 	}
 	return result, nil
+}
+
+func applyVerificationReport(plan *searchplan.FilterPlan, report searchplan.VerificationReport) {
+	rawByID := make(map[string]string)
+	for _, resolution := range plan.Resolutions {
+		rawByID[resolution.RequirementID] = resolution.RawText
+	}
+	for requirementID, counts := range report.ByRequirement {
+		if counts.Mismatch == 0 && counts.Unknown == 0 {
+			continue
+		}
+		parts := make([]string, 0, 2)
+		if counts.Mismatch > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个不匹配报价", counts.Mismatch))
+		}
+		if counts.Unknown > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个字段不足报价", counts.Unknown))
+		}
+		plan.Disclosures = searchplan.AddDisclosure(plan.Disclosures, searchplan.Disclosure{
+			RequirementID: requirementID,
+			RawText:       rawByID[requirementID],
+			Kind:          searchplan.DisclosureVerifierMismatch,
+			Message:       "已对“" + strings.TrimSpace(rawByID[requirementID]) + "”做本地二次校验，并排除" + strings.Join(parts, "和") + "。",
+			MustMention:   true,
+		})
+	}
+}
+
+func applyExploratoryRankingReport(plan *searchplan.FilterPlan, report localrank.Report) {
+	for index := range plan.Disclosures {
+		disclosure := &plan.Disclosures[index]
+		if disclosure.Kind != searchplan.DisclosureExploratoryRanked {
+			continue
+		}
+		evidence := report.EvidenceByRequirement[disclosure.RequirementID]
+		disclosure.Evidence = append([]string(nil), evidence...)
+		if len(evidence) == 0 {
+			disclosure.Message = "“" + strings.TrimSpace(disclosure.RawText) + "”缺少足够的可验证车辆事实，本次没有把它当作已满足条件，也没有据此改变候选顺序。"
+			continue
+		}
+		disclosure.Message = "“" + strings.TrimSpace(disclosure.RawText) + "”不是已验证满足的条件；本次仅根据" +
+			strings.Join(evidence, "、") + "等返回事实进行探索性排序。"
+	}
 }
 
 var _ resultProcessor = quoteResultProcessor{}
@@ -222,16 +282,57 @@ func applyResolutions(agentSession *session.AgentSession, resolutions []searchpl
 
 func resultFromPlan(status SearchResultStatus, plan searchplan.FilterPlan, vehicles []guide.VehRate, contextID string, page int) *SearchCarResult {
 	return &SearchCarResult{
-		Status:                 status,
-		ContextID:              contextID,
-		Vehicles:               vehicles,
-		AppliedRequirements:    resultsFor(plan.Resolutions, searchplan.CapabilityFilterable),
-		VerifiedRequirements:   resultsFor(plan.Resolutions, searchplan.CapabilityVerifiable),
-		RankedRequirements:     resultsFor(plan.Resolutions, searchplan.CapabilityRankable),
-		AdvisoryRequirements:   resultsFor(plan.Resolutions, searchplan.CapabilityAdvisory),
-		UnresolvedRequirements: resultsFor(plan.Resolutions, searchplan.CapabilityAmbiguous, searchplan.CapabilityUnverifiable, searchplan.CapabilityUnsupported),
-		RequestPage:            page,
+		Status:                      status,
+		ContextID:                   contextID,
+		Vehicles:                    vehicles,
+		AppliedRequirements:         resultsFor(plan.Resolutions, searchplan.CapabilityFilterable),
+		VerifiedRequirements:        resultsFor(plan.Resolutions, searchplan.CapabilityVerifiable),
+		LocallyVerifiedRequirements: localVerifierResults(plan),
+		RankedRequirements:          resultsFor(plan.Resolutions, searchplan.CapabilityRankable),
+		AdvisoryRequirements:        resultsFor(plan.Resolutions, searchplan.CapabilityAdvisory),
+		UnresolvedRequirements:      resultsFor(plan.Resolutions, searchplan.CapabilityAmbiguous, searchplan.CapabilityUnverifiable, searchplan.CapabilityUnsupported),
+		Disclosures:                 append([]searchplan.Disclosure(nil), plan.Disclosures...),
+		RequestPage:                 page,
 	}
+}
+
+func localVerifierResults(plan searchplan.FilterPlan) []RequirementResult {
+	requirementIDs := make(map[string]struct{}, len(plan.LocalVerifiers))
+	for _, verifier := range plan.LocalVerifiers {
+		requirementIDs[verifier.RequirementID] = struct{}{}
+	}
+	var result []RequirementResult
+	for _, value := range plan.Resolutions {
+		if _, exists := requirementIDs[value.RequirementID]; !exists {
+			continue
+		}
+		result = append(result, RequirementResult{
+			ID:         value.RequirementID,
+			RawText:    value.RawText,
+			Reason:     value.Reason,
+			ReasonCode: value.ReasonCode,
+			Importance: value.Importance,
+			Capability: value.Capability,
+			Status:     value.Status,
+		})
+	}
+	return result
+}
+
+func mergeVerificationReports(left, right searchplan.VerificationReport) searchplan.VerificationReport {
+	if left.ByRequirement == nil {
+		left.ByRequirement = make(map[string]searchplan.VerificationCounts)
+	}
+	for requirementID, counts := range right.ByRequirement {
+		current := left.ByRequirement[requirementID]
+		current.Match += counts.Match
+		current.Mismatch += counts.Mismatch
+		current.Unknown += counts.Unknown
+		left.ByRequirement[requirementID] = current
+	}
+	left.MatchedQuotes += right.MatchedQuotes
+	left.RejectedQuotes += right.RejectedQuotes
+	return left
 }
 
 func resultsFor(values []searchplan.Resolution, capabilities ...searchplan.Capability) []RequirementResult {

@@ -65,17 +65,20 @@ type SearchCarResult struct {
 	ContextID     string
 	Vehicles      []guide.VehRate
 
-	AppliedRequirements    []RequirementResult
-	VerifiedRequirements   []RequirementResult
-	RankedRequirements     []RequirementResult
-	AdvisoryRequirements   []RequirementResult
-	UnresolvedRequirements []RequirementResult
-	MissingFields          []SearchMissingField
-	Message                string
-	RankingScope           string
-	RequestPage            int
-	Deltas                 []session.StateDelta
-	CapabilityResolutions  []capability.Resolution
+	AppliedRequirements         []RequirementResult
+	VerifiedRequirements        []RequirementResult
+	LocallyVerifiedRequirements []RequirementResult
+	RankedRequirements          []RequirementResult
+	AdvisoryRequirements        []RequirementResult
+	UnresolvedRequirements      []RequirementResult
+	Disclosures                 []searchplan.Disclosure
+	VerificationReport          searchplan.VerificationReport
+	MissingFields               []SearchMissingField
+	Message                     string
+	RankingScope                string
+	RequestPage                 int
+	Deltas                      []session.StateDelta
+	CapabilityResolutions       []capability.Resolution
 }
 
 func NeedsRequirementResult(message string) *SearchCarResult {

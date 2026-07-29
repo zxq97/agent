@@ -7,6 +7,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/internal/capability"
 	"github.com/zxq97/agent/internal/searchplan"
 	"github.com/zxq97/agent/internal/searchruntime"
 	"github.com/zxq97/agent/internal/session"
@@ -31,16 +32,8 @@ func (h *SearchCarHandler) freshSearch(ctx context.Context, agentSession *sessio
 	}
 	executionPlan := h.compileExecutionPlan(ctx, agentSession, baseline)
 	plan := executionPlan.FilterPlan
+	effectivePlan := plan
 	applyResolutions(agentSession, plan.Resolutions)
-	if blocking := executionPlan.FirstBlockingResolution(); blocking != nil {
-		agentSession.Search.DirtyReason = "capability_limit"
-		return &SearchCarResult{
-			Status:                 ResultCapabilityLimit,
-			UnresolvedRequirements: resultsFor(plan.Resolutions, searchplan.CapabilityAmbiguous, searchplan.CapabilityUnverifiable, searchplan.CapabilityUnsupported),
-			Message:                "当前无法可靠执行硬条件：" + blocking.RawText + "。" + blocking.Reason,
-			CapabilityResolutions:  executionPlan.Resolutions,
-		}, nil
-	}
 
 	response := &guide.SearchResponse{ContextID: baseline.ContextID, VehRates: searchruntime.QuotesToGuide(baseline.BaseQuotes)}
 	if len(plan.FilterCodes()) > 0 || plan.ServerSort != "" {
@@ -53,10 +46,63 @@ func (h *SearchCarHandler) freshSearch(ctx context.Context, agentSession *sessio
 		}
 	}
 	result, err := h.finishSearch(ctx, agentSession, plan, response, 1, pageSize, now, true)
-	if result != nil {
-		result.CapabilityResolutions = executionPlan.Resolutions
+	if err != nil {
+		return result, err
 	}
-	return result, err
+	if result != nil && (result.Status == ResultNoResults || result.Status == ResultCapabilityLimit) {
+		if alternative, ok := searchplan.FirstRelaxedAlternative(plan); ok {
+			effectivePlan = alternative
+			alternativeResponse := &guide.SearchResponse{
+				ContextID: baseline.ContextID,
+				VehRates:  searchruntime.QuotesToGuide(baseline.BaseQuotes),
+			}
+			if len(alternative.FilterCodes()) > 0 || alternative.ServerSort != "" {
+				alternativeResponse, err = h.executor.Execute(ctx, buildRequest(
+					agentSession.Search,
+					alternative.FilterCodes(),
+					alternative.ServerSort,
+					baseline.ContextID,
+					1,
+					pageSize,
+				))
+				if err != nil {
+					return nil, err
+				}
+				if alternativeResponse == nil {
+					return nil, errors.New("search car: relaxed response is empty")
+				}
+			}
+			applyResolutions(agentSession, alternative.Resolutions)
+			result, err = h.finishSearch(ctx, agentSession, alternative, alternativeResponse, 1, pageSize, now, true)
+			if err != nil {
+				return result, err
+			}
+		}
+	}
+	if result != nil {
+		result.CapabilityResolutions = capabilityResolutionsForPlan(effectivePlan, executionPlan.Resolutions)
+	}
+	return result, nil
+}
+
+func capabilityResolutionsForPlan(plan searchplan.FilterPlan, values []capability.Resolution) []capability.Resolution {
+	result := append([]capability.Resolution(nil), values...)
+	relaxed := make(map[string]struct{}, len(plan.RelaxedRequirementIDs))
+	for _, requirementID := range plan.RelaxedRequirementIDs {
+		relaxed[requirementID] = struct{}{}
+	}
+	for index := range result {
+		if _, exists := relaxed[result[index].RequirementID]; !exists {
+			continue
+		}
+		result[index].Status = capability.ResolutionPartiallyResolved
+		result[index].ReasonCode = "hard_requirement_relaxed_after_no_results"
+		result[index].Reason = "严格搜索无结果后，仅为提供替代候选而移除此条件"
+		result[index].Executions = nil
+		result[index].ResolvedPart = ""
+		result[index].UnresolvedPart = result[index].RawText
+	}
+	return result
 }
 
 func (h *SearchCarHandler) continueSearch(ctx context.Context, agentSession *session.AgentSession, plan searchplan.FilterPlan, pageSize int, now time.Time) (*SearchCarResult, error) {

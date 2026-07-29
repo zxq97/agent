@@ -4,7 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/capability"
 	"github.com/zxq97/agent/internal/config"
+	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
+	"github.com/zxq97/agent/internal/router"
+	"github.com/zxq97/agent/internal/vehiclecatalog"
 )
 
 func TestBuildHarnessPolicyAppliesTaskOverride(t *testing.T) {
@@ -39,5 +44,24 @@ func TestBuildHarnessPolicyAppliesTaskOverride(t *testing.T) {
 		defaultPolicy.MaxAttempts != 1 ||
 		defaultPolicy.RetryOnInvalid {
 		t.Fatalf("unexpected default policy: %#v", defaultPolicy)
+	}
+}
+
+func TestDefaultHarnessPolicyRoutesFlashAndProTasks(t *testing.T) {
+	for _, taskID := range []string{router.LLMTaskID, "rental_context.extract", "general_reply.generate"} {
+		policy := buildHarnessPolicy(nil, taskID)
+		if policy.PrimaryModel != llm.ModelFlash || policy.FallbackModel != llm.ModelPro {
+			t.Fatalf("task %q should use Flash then Pro: %#v", taskID, policy)
+		}
+	}
+	for _, taskID := range []string{
+		vehiclerequirement.LLMTaskID,
+		capability.LLMTaskID,
+		vehiclecatalog.CandidateSelectorTaskID,
+	} {
+		policy := buildHarnessPolicy(nil, taskID)
+		if policy.PrimaryModel != llm.ModelPro || policy.FallbackModel != "" {
+			t.Fatalf("task %q should use Pro: %#v", taskID, policy)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"strings"
 )
 
 type DefaultResolver struct {
@@ -131,6 +132,9 @@ func executionFor(definition Definition, value Requirement, runtime RuntimeConte
 		if executable(ExecutionLocalFilter, definition.LocalFilter) && fieldsAvailable(runtime.ResultFields, definition.LocalFilter.RequiredFields) {
 			return execution(ExecutionLocalFilter, definition.LocalFilter), ResolutionResolved, "local_filter", "使用真实返回字段执行本地严格过滤"
 		}
+		if executable(ExecutionLocalRank, definition.LocalRank) && fieldsAvailable(runtime.ResultFields, definition.LocalRank.RequiredFields) {
+			return execution(ExecutionLocalRank, definition.LocalRank), ResolutionPartiallyResolved, "hard_requirement_rank_only", "该硬诉求不能被严格证明，仅使用可用事实对候选进行探索性排序"
+		}
 		if hasAnyExecution(definition) {
 			return nil, ResolutionUnsupported, "hard_requirement_not_filterable", "硬需求只有排序或缺少严格过滤能力"
 		}
@@ -162,8 +166,16 @@ func executable(mode ExecutionMode, definition *ExecutionDefinition) bool {
 	}
 	switch mode {
 	case ExecutionLocalRank:
-		return definition.Operation == "price_low" &&
-			containsString(definition.RequiredFields, "total_charge.total_amount")
+		if definition.Operation == "price_low" {
+			return containsString(definition.RequiredFields, "total_charge.total_amount")
+		}
+		switch strings.TrimPrefix(definition.Operation, "scenario:") {
+		case "elderly_friendly_v1", "family_trip_v1", "large_space_v1",
+			"long_distance_v1", "large_luggage_v1":
+			return strings.HasPrefix(definition.Operation, "scenario:") &&
+				len(definition.RequiredFields) > 0
+		}
+		return false
 	default:
 		return false
 	}

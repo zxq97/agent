@@ -15,14 +15,14 @@ func (m staticMatcher) Match(context.Context, *MatchRequest) ([]Match, error) {
 	return m.matches, nil
 }
 
-func TestResolverKeepsScenarioRelevantButUnexecutable(t *testing.T) {
+func TestResolverExecutesApprovedScenarioRank(t *testing.T) {
 	resolver := NewResolver(NewDefaultCatalog(), nil)
 	result := resolver.Resolve(context.Background(), Requirement{
 		ID: "elderly", RawText: "适合带老人出行", SemanticLabel: "elderly_friendly",
 		Category: requirement.CategoryUsageScenario, Importance: "soft",
 	}, RuntimeContext{ResultFields: guideFields()})
-	if result.Status != ResolutionInsufficientData || len(result.Executions) != 0 ||
-		result.ReasonCode != "scenario_model_unavailable" {
+	if result.Status != ResolutionResolved || len(result.Executions) != 1 ||
+		result.Executions[0].Operation != "scenario:elderly_friendly_v1" {
 		t.Fatalf("unexpected resolution: %#v", result)
 	}
 }
@@ -44,14 +44,14 @@ func TestResolverExecutesSoftRankOnlyWithRequiredField(t *testing.T) {
 	}
 }
 
-func TestResolverDoesNotDowngradeHardRequirementToRank(t *testing.T) {
+func TestResolverDowngradesHardNonFilterableRequirementToDisclosedRank(t *testing.T) {
 	resolver := NewResolver(NewDefaultCatalog(), nil)
 	result := resolver.Resolve(context.Background(), Requirement{
 		ID: "budget", RawText: "必须便宜", SemanticLabel: "budget_friendly",
 		Category: requirement.CategoryPreference, Importance: "hard",
 	}, RuntimeContext{ResultFields: guideFields()})
-	if result.Status != ResolutionUnsupported || len(result.Executions) != 0 ||
-		result.ReasonCode != "hard_requirement_not_filterable" {
+	if result.Status != ResolutionPartiallyResolved || len(result.Executions) != 1 ||
+		result.ReasonCode != "hard_requirement_rank_only" {
 		t.Fatalf("unexpected resolution: %#v", result)
 	}
 }

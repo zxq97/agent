@@ -40,6 +40,7 @@ type MenuFilter struct {
 	RequirementID string
 	Code          string
 	Name          string
+	Prefilter     bool
 }
 
 type QuoteFilter struct {
@@ -47,6 +48,43 @@ type QuoteFilter struct {
 	Facet         string
 	Operator      string
 	Value         string
+}
+
+// LocalVerifier validates that a quote returned for a remote filter still
+// satisfies the deterministic requirement.
+type LocalVerifier struct {
+	RequirementID string
+	Facet         string
+	EntityID      string
+	ExpectedBrand string
+	ExpectedNames []string
+	Operator      string
+	Value         string
+	MinValue      string
+	MaxValue      string
+}
+
+// VehicleVerifier is kept as a source-compatible alias while callers migrate
+// to the generic LocalVerifier name.
+type VehicleVerifier = LocalVerifier
+
+type DisclosureKind string
+
+const (
+	DisclosureHardUnmapped      DisclosureKind = "hard_unmapped"
+	DisclosureHardRelaxed       DisclosureKind = "hard_relaxed"
+	DisclosureExploratoryRanked DisclosureKind = "exploratory_ranked"
+	DisclosureVerifierMismatch  DisclosureKind = "verifier_mismatch"
+)
+
+// Disclosure is a deterministic user-facing fact that a reply must preserve.
+type Disclosure struct {
+	RequirementID string
+	RawText       string
+	Kind          DisclosureKind
+	Message       string
+	Evidence      []string
+	MustMention   bool
 }
 
 type RankFactorType string
@@ -66,6 +104,17 @@ type RankFactor struct {
 	DataField     string
 }
 
+// ExploratoryRank describes a versioned scenario scorer. It may change order,
+// but it can never prove that a vehicle satisfies a hard requirement.
+type ExploratoryRank struct {
+	RequirementID string
+	RawText       string
+	ScenarioID    string
+	ModelVersion  string
+	Importance    string
+	Weight        float64
+}
+
 type Resolution struct {
 	RequirementID string
 	RawText       string
@@ -80,13 +129,22 @@ type FilterPlan struct {
 	MenuFilters []MenuFilter
 	ServerSort  string
 
-	QuoteFilters []QuoteFilter
-	RankFactors  []RankFactor
-	Resolutions  []Resolution
+	QuoteFilters     []QuoteFilter
+	LocalVerifiers   []LocalVerifier
+	RankFactors      []RankFactor
+	ExploratoryRanks []ExploratoryRank
+	Resolutions      []Resolution
+	Disclosures      []Disclosure
+
+	RelaxedRequirementIDs []string
 
 	CapabilityVersion  string
 	RuntimeFingerprint string
 	PlanHash           string
+}
+
+func (p FilterPlan) HasLocalVerification() bool {
+	return len(p.LocalVerifiers) > 0
 }
 
 func (p FilterPlan) FilterCodes() []string {

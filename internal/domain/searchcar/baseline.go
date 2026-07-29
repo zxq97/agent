@@ -74,7 +74,15 @@ func (h *SearchCarHandler) validContinuationPlan(ctx context.Context, agentSessi
 		return searchplan.SearchExecutionPlan{}, false
 	}
 	executionPlan := h.compileExecutionPlan(ctx, agentSession, agentSession.Search.Baseline)
-	if executionPlan.PlanHash != snapshot.FilterPlanHash {
+	for _, requirementID := range snapshot.RelaxedRequirementIDs {
+		var ok bool
+		executionPlan.FilterPlan, ok = searchplan.RelaxRequirement(executionPlan.FilterPlan, requirementID)
+		if !ok {
+			return searchplan.SearchExecutionPlan{}, false
+		}
+	}
+	executionPlan.PlanHash = executionPlan.FilterPlan.PlanHash
+	if executionPlan.FilterPlan.PlanHash != snapshot.FilterPlanHash {
 		return searchplan.SearchExecutionPlan{}, false
 	}
 	return executionPlan, true

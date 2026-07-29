@@ -8,7 +8,7 @@ import (
 	"github.com/zxq97/agent/internal/requirement"
 )
 
-func TestExecutionCompilerPreservesSoftOpenRequirementAsUnresolved(t *testing.T) {
+func TestExecutionCompilerMaterializesSoftExploratoryRequirement(t *testing.T) {
 	compiler := NewExecutionCompiler(NewCompiler(), capability.NewResolver(capability.NewDefaultCatalog(), nil))
 	plan := compiler.Compile(context.Background(), []Requirement{{
 		ID: "elderly", RawText: "适合带老人出行", SemanticLabel: "elderly_friendly",
@@ -18,20 +18,22 @@ func TestExecutionCompilerPreservesSoftOpenRequirementAsUnresolved(t *testing.T)
 		RentalFingerprint: "rental",
 	}, 3)
 	if plan.RequirementVersion != 3 || plan.PlanHash == "" ||
-		len(plan.Unresolved) != 1 || plan.FirstBlockingResolution() != nil ||
-		len(plan.FilterPlan.Resolutions) != 1 {
+		len(plan.Unresolved) != 0 || plan.FirstBlockingResolution() != nil ||
+		len(plan.LocalRanks) != 1 || len(plan.FilterPlan.ExploratoryRanks) != 1 ||
+		len(plan.FilterPlan.Disclosures) != 1 {
 		t.Fatalf("unexpected plan: %#v", plan)
 	}
 }
 
-func TestExecutionCompilerBlocksHardOpenRequirement(t *testing.T) {
+func TestExecutionCompilerRanksHardOpenRequirementWithoutBlocking(t *testing.T) {
 	compiler := NewExecutionCompiler(NewCompiler(), capability.NewResolver(capability.NewDefaultCatalog(), nil))
 	plan := compiler.Compile(context.Background(), []Requirement{{
 		ID: "elderly", RawText: "必须适合老人", SemanticLabel: "elderly_friendly",
 		Category: requirement.CategoryUsageScenario, Importance: "hard", Operator: "eq",
-	}}, nil, capability.RuntimeContext{ResultFields: map[string]struct{}{}}, 1)
-	if plan.FirstBlockingResolution() == nil || len(plan.RemoteFilters) != 0 ||
-		len(plan.LocalFilters) != 0 || len(plan.LocalRanks) != 0 {
+	}}, nil, capability.RuntimeContext{ResultFields: map[string]struct{}{"vehicle.seats": {}}}, 1)
+	if plan.FirstBlockingResolution() != nil || len(plan.RemoteFilters) != 0 ||
+		len(plan.LocalFilters) != 0 || len(plan.LocalRanks) != 1 ||
+		len(plan.FilterPlan.Disclosures) != 1 {
 		t.Fatalf("unexpected plan: %#v", plan)
 	}
 }

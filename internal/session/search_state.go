@@ -119,11 +119,12 @@ const (
 type ActiveSearchSnapshot struct {
 	SearchID string
 
-	RentalFingerprint  string
-	RequirementVersion int64
-	FilterPlanHash     string
-	CapabilityVersion  string
-	RuntimeFingerprint string
+	RentalFingerprint     string
+	RequirementVersion    int64
+	FilterPlanHash        string
+	CapabilityVersion     string
+	RuntimeFingerprint    string
+	RelaxedRequirementIDs []string
 
 	BaselineContextID     string
 	ContinuationContextID string

@@ -9,6 +9,27 @@ import (
 	"github.com/zxq97/agent/api/guide"
 )
 
+type VehicleVerificationStatus string
+
+const (
+	VehicleVerificationMatch    VehicleVerificationStatus = "match"
+	VehicleVerificationMismatch VehicleVerificationStatus = "mismatch"
+	VehicleVerificationUnknown  VehicleVerificationStatus = "unknown"
+)
+
+type VerificationCounts struct {
+	Match    int
+	Mismatch int
+	Unknown  int
+}
+
+// VerificationReport summarizes deterministic post-filter verification.
+type VerificationReport struct {
+	ByRequirement  map[string]VerificationCounts
+	MatchedQuotes  int
+	RejectedQuotes int
+}
+
 func ApplyQuoteFilters(values []guide.VehRate, filters []QuoteFilter) []guide.VehRate {
 	if len(filters) == 0 {
 		return append([]guide.VehRate(nil), values...)
@@ -20,6 +41,156 @@ func ApplyQuoteFilters(values []guide.VehRate, filters []QuoteFilter) []guide.Ve
 		}
 	}
 	return result
+}
+
+// ApplyLocalVerifiers keeps only quotes that match every deterministic
+// postcondition already represented by a remote filter or safe prefilter.
+func ApplyLocalVerifiers(values []guide.VehRate, verifiers []LocalVerifier) ([]guide.VehRate, VerificationReport) {
+	report := VerificationReport{ByRequirement: make(map[string]VerificationCounts)}
+	if len(verifiers) == 0 {
+		report.MatchedQuotes = len(values)
+		return append([]guide.VehRate(nil), values...), report
+	}
+	result := make([]guide.VehRate, 0, len(values))
+	for _, value := range values {
+		matched := true
+		for _, verifier := range verifiers {
+			status := VerifyLocal(value, verifier)
+			counts := report.ByRequirement[verifier.RequirementID]
+			switch status {
+			case VehicleVerificationMatch:
+				counts.Match++
+			case VehicleVerificationMismatch:
+				counts.Mismatch++
+				matched = false
+			default:
+				counts.Unknown++
+				matched = false
+			}
+			report.ByRequirement[verifier.RequirementID] = counts
+		}
+		if matched {
+			result = append(result, value)
+			report.MatchedQuotes++
+		} else {
+			report.RejectedQuotes++
+		}
+	}
+	return result, report
+}
+
+// ApplyVehicleVerifiers is the compatibility wrapper for vehicle-only callers.
+func ApplyVehicleVerifiers(values []guide.VehRate, verifiers []VehicleVerifier) []guide.VehRate {
+	result, _ := ApplyLocalVerifiers(values, verifiers)
+	return result
+}
+
+// VerifyLocal checks one quote against one deterministic postcondition.
+func VerifyLocal(value guide.VehRate, verifier LocalVerifier) VehicleVerificationStatus {
+	switch verifier.Facet {
+	case "seat_num":
+		if value.Vehicle == nil || value.Vehicle.Seats <= 0 {
+			return VehicleVerificationUnknown
+		}
+		target, err := strconv.ParseFloat(verifier.Value, 64)
+		if err != nil {
+			return VehicleVerificationUnknown
+		}
+		if compareFloat(float64(value.Vehicle.Seats), target, verifier.Operator) {
+			return VehicleVerificationMatch
+		}
+		return VehicleVerificationMismatch
+	case "price_total":
+		if value.TotalCharge == nil {
+			return VehicleVerificationUnknown
+		}
+		return verifyNumericValue(value.TotalCharge.TotalAmount, verifier)
+	case "price_daily":
+		if value.DailyDeductionAmount <= 0 {
+			return VehicleVerificationUnknown
+		}
+		return verifyNumericValue(value.DailyDeductionAmount, verifier)
+	case "brand", "vehicle_series", "vehicle_model":
+		return VerifyVehicle(value, verifier)
+	default:
+		return VehicleVerificationUnknown
+	}
+}
+
+func verifyNumericValue(actual float64, verifier LocalVerifier) VehicleVerificationStatus {
+	if verifier.Operator == "range" {
+		minimum, minErr := strconv.ParseFloat(verifier.MinValue, 64)
+		maximum, maxErr := strconv.ParseFloat(verifier.MaxValue, 64)
+		if minErr != nil || maxErr != nil {
+			return VehicleVerificationUnknown
+		}
+		if actual >= minimum && actual <= maximum {
+			return VehicleVerificationMatch
+		}
+		return VehicleVerificationMismatch
+	}
+	target, err := strconv.ParseFloat(verifier.Value, 64)
+	if err != nil {
+		return VehicleVerificationUnknown
+	}
+	if compareFloat(actual, target, verifier.Operator) {
+		return VehicleVerificationMatch
+	}
+	return VehicleVerificationMismatch
+}
+
+// VerifyVehicle checks one Guide quote against one catalog-backed vehicle
+// condition without inventing missing response data.
+func VerifyVehicle(value guide.VehRate, verifier VehicleVerifier) VehicleVerificationStatus {
+	if value.Vehicle == nil {
+		return VehicleVerificationUnknown
+	}
+	vehicle := value.Vehicle
+	if verifier.Facet == "brand" {
+		if vehicle.BrandName == "" {
+			return VehicleVerificationUnknown
+		}
+		if matchesExpectedName(vehicle.BrandName, verifier.ExpectedNames, false) {
+			return VehicleVerificationMatch
+		}
+		return VehicleVerificationMismatch
+	}
+	if verifier.Facet != "vehicle_series" && verifier.Facet != "vehicle_model" {
+		return VehicleVerificationUnknown
+	}
+	if verifier.ExpectedBrand != "" {
+		if vehicle.BrandName == "" {
+			return VehicleVerificationUnknown
+		}
+		if normalizeQuoteText(vehicle.BrandName) != normalizeQuoteText(verifier.ExpectedBrand) {
+			return VehicleVerificationMismatch
+		}
+	}
+	if vehicle.VehicleName == "" && vehicle.GroupName == "" {
+		return VehicleVerificationUnknown
+	}
+	if matchesExpectedName(vehicle.VehicleName, verifier.ExpectedNames, true) ||
+		matchesExpectedName(vehicle.GroupName, verifier.ExpectedNames, true) {
+		return VehicleVerificationMatch
+	}
+	return VehicleVerificationMismatch
+}
+
+func matchesExpectedName(actual string, expected []string, contains bool) bool {
+	actual = normalizeQuoteText(actual)
+	if actual == "" {
+		return false
+	}
+	for _, value := range expected {
+		target := normalizeQuoteText(value)
+		if target == "" {
+			continue
+		}
+		if actual == target || (contains && strings.Contains(actual, target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func Rerank(values []guide.VehRate, factors []RankFactor) []guide.VehRate {

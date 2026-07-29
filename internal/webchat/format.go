@@ -57,6 +57,11 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 				parts = append(parts, "软偏好排序只作用于本次已获取的候选车辆。")
 			}
 		}
+		for _, disclosure := range result.Disclosures {
+			if disclosure.MustMention && strings.TrimSpace(disclosure.Message) != "" {
+				parts = append(parts, disclosure.Message)
+			}
+		}
 	}
 	if turn.GeneralReply != nil {
 		parts = append(parts, turn.GeneralReply.Message)
@@ -106,6 +111,7 @@ func requirementResolutionViews(result *searchcar.SearchCarResult) []Requirement
 	}
 	addLegacy(result.AppliedRequirements, "remote_filter")
 	addLegacy(result.VerifiedRequirements, "local_filter")
+	addLegacy(result.LocallyVerifiedRequirements, "local_verifier")
 	addLegacy(result.RankedRequirements, "rank")
 	addLegacy(result.AdvisoryRequirements, "")
 	addLegacy(result.UnresolvedRequirements, "")

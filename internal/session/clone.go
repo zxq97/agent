@@ -107,6 +107,7 @@ func cloneSearchSnapshot(value *ActiveSearchSnapshot) *ActiveSearchSnapshot {
 	cloned := *value
 	cloned.SeenQuoteIDs = cloneSet(value.SeenQuoteIDs)
 	cloned.SeenVehicleCodes = cloneSet(value.SeenVehicleCodes)
+	cloned.RelaxedRequirementIDs = append([]string(nil), value.RelaxedRequirementIDs...)
 	cloned.Batches = make([]SearchResultBatch, len(value.Batches))
 	for index := range value.Batches {
 		cloned.Batches[index] = value.Batches[index]

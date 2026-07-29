@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zxq97/agent/api/agenthub"
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/api/llm"
 	"github.com/zxq97/agent/api/maps"
@@ -67,12 +68,31 @@ func main() {
 	exitOn(err, "load timezone")
 	rentalHandler, err := rentalcontext.NewModifyRentalContextHandler(rentalExtractor, mapsClient, randomIDGenerator{}, time.Now, zone, rentalcontext.DefaultAmbiguityConfig())
 	exitOn(err, "create rental context handler")
-	requirementHandler, err := vehiclerequirement.NewHandler(requirementExtractor, vehiclecatalog.NewDefaultCatalog())
+	vehicleCatalog := vehiclecatalog.NewDefaultCatalog()
+	var vehicleResolver vehiclecatalog.Resolver = vehicleCatalog
+	if cfg.AgentHub.Endpoint != "" {
+		agentHubClient := agenthub.NewHTTPClient(&agenthub.HTTPConfig{
+			Endpoint: cfg.AgentHub.Endpoint, Path: cfg.AgentHub.Path,
+			APIKey: cfg.AgentHub.APIKey, TimeoutSec: cfg.AgentHub.TimeoutSec,
+		})
+		candidateSelector, selectorErr := vehiclecatalog.NewLLMCandidateSelector(
+			llmClient,
+			buildHarnessPolicy(cfg.LLM.Harness, vehiclecatalog.CandidateSelectorTaskID),
+		)
+		exitOn(selectorErr, "create vehicle candidate selector")
+		vehicleResolver = vehiclecatalog.NewRecallResolver(vehicleCatalog, agentHubClient, candidateSelector)
+	}
+	requirementHandler, err := vehiclerequirement.NewHandler(requirementExtractor, vehicleResolver)
 	exitOn(err, "create vehicle requirement handler")
 	capabilityMatcher, err := capability.NewLLMMatcher(llmClient, buildHarnessPolicy(cfg.LLM.Harness, capability.LLMTaskID))
 	exitOn(err, "create capability matcher")
 	capabilityResolver := capability.NewResolver(capability.NewDefaultCatalog(), capabilityMatcher)
-	searchHandler, err := searchcar.NewSearchCarHandler(guideClient, searchplan.NewCompiler(), time.Now, capabilityResolver)
+	searchHandler, err := searchcar.NewSearchCarHandler(
+		guideClient,
+		searchplan.NewCompilerWithVehicleCatalog(vehicleCatalog),
+		time.Now,
+		capabilityResolver,
+	)
 	exitOn(err, "create search car handler")
 	intentRouter, err := router.NewLLMRouter(llmClient, buildHarnessPolicy(cfg.LLM.Harness, router.LLMTaskID))
 	exitOn(err, "create intent router")
@@ -104,13 +124,25 @@ func main() {
 }
 
 func buildHarnessPolicy(cfg *config.LLMHarnessConfig, taskID string) llmharness.Policy {
-	policy := llmharness.DefaultPolicy()
+	policy := defaultHarnessPolicy(taskID)
 	if cfg == nil {
 		return policy
 	}
 	applyHarnessPolicy(&policy, &cfg.LLMHarnessPolicyConfig)
 	if taskPolicy := cfg.Tasks[taskID]; taskPolicy != nil {
 		applyHarnessPolicy(&policy, taskPolicy)
+	}
+	return policy
+}
+
+func defaultHarnessPolicy(taskID string) llmharness.Policy {
+	policy := llmharness.DefaultPolicy()
+	policy.PrimaryModel = llm.ModelFlash
+	policy.FallbackModel = llm.ModelPro
+	switch taskID {
+	case vehiclerequirement.LLMTaskID, capability.LLMTaskID, vehiclecatalog.CandidateSelectorTaskID:
+		policy.PrimaryModel = llm.ModelPro
+		policy.FallbackModel = ""
 	}
 	return policy
 }

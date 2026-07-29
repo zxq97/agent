@@ -45,7 +45,7 @@ func (h *Handler) Handle(ctx context.Context, agentSession *session.AgentSession
 	}
 	deltas := make([]session.SearchRequirementStateItem, 0, len(extracted.Requirements))
 	for _, requirement := range extracted.Requirements {
-		deltas = append(deltas, h.normalize(requirement))
+		deltas = append(deltas, h.normalizeContext(ctx, requirement))
 	}
 	merged, changed := merge(agentSession.Search.Requirements, extracted.Requirements, deltas)
 	result := &UpdateResult{Changed: changed, Requirements: append([]session.SearchRequirementStateItem(nil), merged...)}
@@ -84,6 +84,10 @@ func extractionInput(agentSession *session.AgentSession, sourceText string) *Ext
 }
 
 func (h *Handler) normalize(requirement Requirement) session.SearchRequirementStateItem {
+	return h.normalizeContext(context.Background(), requirement)
+}
+
+func (h *Handler) normalizeContext(ctx context.Context, requirement Requirement) session.SearchRequirementStateItem {
 	facet := requirement.CanonicalType
 	if facet == "" {
 		facet = requirement.Facet
@@ -117,12 +121,16 @@ func (h *Handler) normalize(requirement Requirement) session.SearchRequirementSt
 	if entityType == "" || raw == "" {
 		return item
 	}
-	resolution := h.entities.Resolve(&vehiclecatalog.ResolveInput{
+	resolveInput := &vehiclecatalog.ResolveInput{
 		Name:       raw,
 		Type:       entityType,
 		BrandHint:  requirement.EntityContext.BrandHint,
 		SeriesHint: requirement.EntityContext.SeriesHint,
-	})
+	}
+	resolution := h.entities.Resolve(resolveInput)
+	if contextual, ok := h.entities.(vehiclecatalog.ContextResolver); ok {
+		resolution = contextual.ResolveContext(ctx, resolveInput)
+	}
 	item.EntityResolution = string(resolution.Status)
 	if resolution.Entity == nil {
 		item.ResolutionReason = "vehicle entity catalog has no unique match"
