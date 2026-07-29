@@ -7,21 +7,33 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/llmharness"
 	"github.com/zxq97/agent/internal/progress"
 	"github.com/zxq97/agent/internal/session"
 )
 
 const maxRecentMessages = 6
 
+// LLMTaskID is the stable identifier for read-only general replies.
+const LLMTaskID = "general_reply.generate"
+
 type LLMHandler struct {
-	client llm.Client
+	harness *llmharness.Harness[promptInput, Result]
 }
 
-func NewLLMHandler(client llm.Client) (*LLMHandler, error) {
+func NewLLMHandler(client llm.Client, policies ...llmharness.Policy) (*LLMHandler, error) {
 	if client == nil {
 		return nil, errors.New("general reply: llm client is required")
 	}
-	return &LLMHandler{client: client}, nil
+	policy, err := llmharness.ResolvePolicy(policies)
+	if err != nil {
+		return nil, err
+	}
+	harness, err := llmharness.New(client, generalReplyTask(), policy)
+	if err != nil {
+		return nil, err
+	}
+	return &LLMHandler{harness: harness}, nil
 }
 
 func (h *LLMHandler) Handle(ctx context.Context, agentSession *session.AgentSession, input *Input) (*Result, error) {
@@ -32,22 +44,52 @@ func (h *LLMHandler) Handle(ctx context.Context, agentSession *session.AgentSess
 		return nil, errors.New("general reply: source text is required")
 	}
 	progress.Emit(ctx, "replying", "正在组织回复")
-	payload, err := json.Marshal(buildPromptInput(agentSession, input))
-	if err != nil {
-		return nil, err
-	}
-	response, err := h.client.Chat(ctx, &llm.ChatRequest{
-		Model:    llm.ModelConversation,
-		System:   generalReplyPrompt,
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: string(payload)}},
+	result, err := h.harness.Run(ctx, &llmharness.RunRequest[promptInput]{
+		Input: promptInputPointer(buildPromptInput(agentSession, input)),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
-		return nil, errors.New("general reply: model returned empty content")
+	return result.Value, nil
+}
+
+func generalReplyTask() llmharness.Task[promptInput, Result] {
+	return llmharness.Task[promptInput, Result]{
+		ID:               LLMTaskID,
+		PromptVersion:    "1.0.0",
+		SchemaVersion:    "general-reply-text/1",
+		ValidatorVersion: "1.0.0",
+		ValidateInput: func(input *promptInput) error {
+			if input == nil || strings.TrimSpace(input.SourceText) == "" {
+				return errors.New("general reply: prompt source text is required")
+			}
+			return nil
+		},
+		BuildRequest: func(input *promptInput) (*llm.ChatRequest, error) {
+			payload, err := json.Marshal(input)
+			if err != nil {
+				return nil, err
+			}
+			return &llm.ChatRequest{
+				System:   generalReplyPrompt,
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: string(payload)}},
+			}, nil
+		},
+		DecodeStrict: func(content string) (*Result, error) {
+			message := strings.TrimSpace(content)
+			if message == "" {
+				return nil, errors.New("general reply: model returned empty content")
+			}
+			return &Result{Message: message}, nil
+		},
+		ValidateOutput: func(_ *promptInput, _ *Result) error {
+			return nil
+		},
 	}
-	return &Result{Message: strings.TrimSpace(response.Content)}, nil
+}
+
+func promptInputPointer(value promptInput) *promptInput {
+	return &value
 }
 
 type promptInput struct {

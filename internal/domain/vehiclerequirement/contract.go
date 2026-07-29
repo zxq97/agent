@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/zxq97/agent/internal/llmharness"
 	"github.com/zxq97/agent/internal/requirement"
 )
 
@@ -48,6 +49,17 @@ type entityContextEnvelope struct {
 }
 
 func decodeExtractResult(content string) (*ExtractResult, error) {
+	result, err := decodeExtractResultStrict(content)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateExtractResultState(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func decodeExtractResultStrict(content string) (*ExtractResult, error) {
 	var envelope extractEnvelope
 	decoder := json.NewDecoder(bytes.NewBufferString(content))
 	decoder.DisallowUnknownFields()
@@ -71,13 +83,25 @@ func decodeExtractResult(content string) (*ExtractResult, error) {
 		}
 		result.Requirements = append(result.Requirements, requirementValue)
 	}
+	return result, nil
+}
+
+func validateExtractResultState(result *ExtractResult) error {
 	if !result.DomainMatched && len(result.Requirements) > 0 {
-		return nil, errors.New("domain_matched=false requires an empty requirements array")
+		return llmharness.NewOutputValidationError(
+			"domain_matched=false requires an empty requirements array",
+			llmharness.ValidationRetryableInvalid,
+			"domain_state_conflict",
+		)
 	}
 	if result.DomainMatched && len(result.Requirements) == 0 {
-		return nil, errors.New("domain_matched=true requires at least one requirement")
+		return llmharness.NewOutputValidationError(
+			"domain_matched=true requires at least one requirement",
+			llmharness.ValidationRetryableInvalid,
+			"domain_state_conflict",
+		)
 	}
-	return result, nil
+	return nil
 }
 
 func (e requirementEnvelope) result() (Requirement, error) {

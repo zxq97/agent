@@ -68,6 +68,9 @@ func TestClientPostJSONRejectsNonOKStatus(t *testing.T) {
 	if body != nil {
 		t.Fatalf("body = %q, want nil", body)
 	}
+	if statusCode, ok := ErrorStatusCode(err); !ok || statusCode != http.StatusCreated {
+		t.Fatalf("status = %d, %t; error = %v", statusCode, ok, err)
+	}
 }
 
 func TestClientPostJSONOmitsAuthorizationWithoutBearerToken(t *testing.T) {

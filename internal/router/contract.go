@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/zxq97/agent/internal/llmharness"
 )
 
 type routeResultEnvelope struct {
@@ -21,6 +22,17 @@ type routeCandidateEnvelope struct {
 }
 
 func decodeRouteResult(content, sourceText string) (*RouteResult, error) {
+	result, err := decodeRouteResultStrict(content)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRouteEvidence(result, sourceText); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func decodeRouteResultStrict(content string) (*RouteResult, error) {
 	var envelope routeResultEnvelope
 	decoder := json.NewDecoder(bytes.NewBufferString(content))
 	decoder.DisallowUnknownFields()
@@ -42,7 +54,7 @@ func decodeRouteResult(content, sourceText string) (*RouteResult, error) {
 	result := &RouteResult{Candidates: make([]RouteCandidate, 0, len(*envelope.Candidates)), UnassignedText: *envelope.UnassignedText}
 	seen := make(map[ActionType]struct{})
 	for _, item := range *envelope.Candidates {
-		candidate, err := item.result(sourceText)
+		candidate, err := item.result()
 		if err != nil {
 			return nil, err
 		}
@@ -52,13 +64,10 @@ func decodeRouteResult(content, sourceText string) (*RouteResult, error) {
 		seen[candidate.Action] = struct{}{}
 		result.Candidates = append(result.Candidates, candidate)
 	}
-	if text := strings.TrimSpace(result.UnassignedText); text != "" && !strings.Contains(sourceText, text) {
-		return nil, errors.New("unassigned_text must quote source_text")
-	}
 	return result, nil
 }
 
-func (e routeCandidateEnvelope) result(sourceText string) (RouteCandidate, error) {
+func (e routeCandidateEnvelope) result() (RouteCandidate, error) {
 	if e.Action == nil || e.EvidenceText == nil || e.Confidence == nil {
 		return RouteCandidate{}, errors.New("action, evidence_text and confidence are required")
 	}
@@ -68,11 +77,31 @@ func (e routeCandidateEnvelope) result(sourceText string) (RouteCandidate, error
 		return RouteCandidate{}, errors.Errorf("invalid action %q", *e.Action)
 	}
 	evidence := strings.TrimSpace(*e.EvidenceText)
-	if evidence == "" || !strings.Contains(sourceText, evidence) {
-		return RouteCandidate{}, errors.New("evidence_text must be a non-empty quote from source_text")
+	if evidence == "" {
+		return RouteCandidate{}, errors.New("evidence_text must be non-empty")
 	}
 	if *e.Confidence < 0 || *e.Confidence > 1 {
 		return RouteCandidate{}, errors.New("confidence must be between 0 and 1")
 	}
 	return RouteCandidate{Action: *e.Action, EvidenceText: evidence, Confidence: *e.Confidence}, nil
+}
+
+func validateRouteEvidence(result *RouteResult, sourceText string) error {
+	for _, candidate := range result.Candidates {
+		if !strings.Contains(sourceText, candidate.EvidenceText) {
+			return llmharness.NewOutputValidationError(
+				"evidence_text must quote source_text",
+				llmharness.ValidationRetryableInvalid,
+				"evidence_not_quoted",
+			)
+		}
+	}
+	if text := strings.TrimSpace(result.UnassignedText); text != "" && !strings.Contains(sourceText, text) {
+		return llmharness.NewOutputValidationError(
+			"unassigned_text must quote source_text",
+			llmharness.ValidationRetryableInvalid,
+			"evidence_not_quoted",
+		)
+	}
+	return nil
 }

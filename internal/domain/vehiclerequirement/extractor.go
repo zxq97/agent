@@ -7,46 +7,90 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/llmharness"
 )
 
 var ErrDomainMismatch = errors.New("input does not belong to vehicle requirement domain")
 
+// LLMTaskID is the stable identifier for vehicle-requirement extraction.
+const LLMTaskID = "vehicle_requirement.extract"
+
 type LLMExtractor struct {
-	client llm.Client
+	harness *llmharness.Harness[ExtractionInput, ExtractResult]
 }
 
-func NewLLMExtractor(client llm.Client) (*LLMExtractor, error) {
+func NewLLMExtractor(client llm.Client, policies ...llmharness.Policy) (*LLMExtractor, error) {
 	if client == nil {
 		return nil, errors.New("vehicle requirement: llm client is required")
 	}
-	return &LLMExtractor{client: client}, nil
+	policy, err := llmharness.ResolvePolicy(policies)
+	if err != nil {
+		return nil, err
+	}
+	harness, err := llmharness.New(client, requirementExtractionTask(), policy)
+	if err != nil {
+		return nil, err
+	}
+	return &LLMExtractor{harness: harness}, nil
 }
 
 func (e *LLMExtractor) Extract(ctx context.Context, input *ExtractionInput) (*ExtractResult, error) {
-	if input == nil || strings.TrimSpace(input.SourceText) == "" {
-		return nil, errors.New("vehicle requirement: extraction input is required")
+	result, err := e.harness.Run(ctx, &llmharness.RunRequest[ExtractionInput]{Input: input})
+	if err != nil {
+		return nil, err
 	}
+	return result.Value, nil
+}
+
+func requirementExtractionTask() llmharness.Task[ExtractionInput, ExtractResult] {
+	return llmharness.Task[ExtractionInput, ExtractResult]{
+		ID:               LLMTaskID,
+		PromptVersion:    "1.0.0",
+		SchemaVersion:    "vehicle-requirement-output/1",
+		ValidatorVersion: "1.0.0",
+		ValidateInput:    validateRequirementExtractionInput,
+		BuildRequest:     buildRequirementExtractionRequest,
+		DecodeStrict:     decodeExtractResultStrict,
+		ValidateOutput:   validateRequirementExtractionOutput,
+		RepairHint: func(string) string {
+			return "请只返回本轮原文明确表达的车辆诉求，并返回全部固定 JSON 字段；不要复述历史诉求。"
+		},
+	}
+}
+
+func validateRequirementExtractionInput(input *ExtractionInput) error {
+	if input == nil || strings.TrimSpace(input.SourceText) == "" {
+		return errors.New("vehicle requirement: extraction input is required")
+	}
+	return nil
+}
+
+func buildRequirementExtractionRequest(input *ExtractionInput) (*llm.ChatRequest, error) {
 	data, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
-	response, err := e.client.Chat(ctx, &llm.ChatRequest{
-		Model:          llm.ModelConversation,
+	return &llm.ChatRequest{
 		System:         requirementPrompt,
 		Messages:       []llm.Message{{Role: llm.RoleUser, Content: string(data)}},
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
-	})
-	if err != nil {
-		return nil, err
+	}, nil
+}
+
+func validateRequirementExtractionOutput(input *ExtractionInput, result *ExtractResult) error {
+	if err := validateExtractResultState(result); err != nil {
+		return err
 	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
-		return nil, errors.New("vehicle requirement: extractor returned empty content")
+	for _, requirement := range result.Requirements {
+		if !strings.Contains(input.SourceText, requirement.RawText) {
+			return llmharness.NewOutputValidationError(
+				"vehicle requirement: raw_text must quote source_text",
+				llmharness.ValidationRetryableInvalid,
+				"requirement_not_quoted",
+			)
+		}
 	}
-	result, err := decodeExtractResult(response.Content)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return nil
 }
 
 const requirementPrompt = `你是租车车辆诉求提取器。你只提取用户本轮对车辆本身的新增、替换和删除操作；不决定是否搜索，不生成 Capability、菜单 code、筛选 code、排序 code、context_id 或任何服务端 ID。

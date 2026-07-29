@@ -9,40 +9,95 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/llmharness"
 )
 
+// LLMTaskID is the stable identifier for capability candidate matching.
+const LLMTaskID = "capability.match"
+
 type LLMMatcher struct {
-	client llm.Client
+	harness *llmharness.Harness[MatchRequest, []Match]
 }
 
-func NewLLMMatcher(client llm.Client) (*LLMMatcher, error) {
+func NewLLMMatcher(client llm.Client, policies ...llmharness.Policy) (*LLMMatcher, error) {
 	if client == nil {
 		return nil, errors.New("capability matcher: llm client is required")
 	}
-	return &LLMMatcher{client: client}, nil
+	policy, err := llmharness.ResolvePolicy(policies)
+	if err != nil {
+		return nil, err
+	}
+	harness, err := llmharness.New(client, matcherTask(), policy)
+	if err != nil {
+		return nil, err
+	}
+	return &LLMMatcher{harness: harness}, nil
 }
 
 func (m *LLMMatcher) Match(ctx context.Context, input *MatchRequest) ([]Match, error) {
-	if input == nil || len(input.Candidates) < 2 || len(input.Candidates) > 10 {
-		return nil, errors.New("capability matcher: requirement and 2 to 10 candidates are required")
+	result, err := m.harness.Run(ctx, &llmharness.RunRequest[MatchRequest]{Input: input})
+	if err != nil {
+		return nil, err
 	}
+	return *result.Value, nil
+}
+
+func matcherTask() llmharness.Task[MatchRequest, []Match] {
+	return llmharness.Task[MatchRequest, []Match]{
+		ID:               LLMTaskID,
+		PromptVersion:    "1.0.0",
+		SchemaVersion:    "capability-match-output/1",
+		ValidatorVersion: "1.0.0",
+		ValidateInput:    validateMatchInput,
+		BuildRequest:     buildMatchRequest,
+		DecodeStrict: func(content string) (*[]Match, error) {
+			matches, err := decodeMatches(content)
+			if err != nil {
+				return nil, err
+			}
+			return &matches, nil
+		},
+		ValidateOutput: validateMatches,
+		RepairHint: func(string) string {
+			return "请重新返回完整 JSON；matches 最多一个，capability_id 只能取自输入 candidates。"
+		},
+	}
+}
+
+func validateMatchInput(input *MatchRequest) error {
+	if input == nil || len(input.Candidates) < 2 || len(input.Candidates) > 10 {
+		return errors.New("capability matcher: requirement and 2 to 10 candidates are required")
+	}
+	return nil
+}
+
+func buildMatchRequest(input *MatchRequest) (*llm.ChatRequest, error) {
 	data, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
-	response, err := m.client.Chat(ctx, &llm.ChatRequest{
-		Model:          llm.ModelConversation,
+	return &llm.ChatRequest{
 		System:         matcherPrompt,
 		Messages:       []llm.Message{{Role: llm.RoleUser, Content: string(data)}},
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
-	})
-	if err != nil {
-		return nil, err
+	}, nil
+}
+
+func validateMatches(input *MatchRequest, matches *[]Match) error {
+	allowed := make(map[string]struct{}, len(input.Candidates))
+	for _, candidate := range input.Candidates {
+		allowed[candidate.ID] = struct{}{}
 	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
-		return nil, errors.New("capability matcher: empty response")
+	for _, match := range *matches {
+		if _, exists := allowed[match.CapabilityID]; !exists {
+			return llmharness.NewOutputValidationError(
+				"capability matcher: capability_id must come from candidates",
+				llmharness.ValidationRetryableInvalid,
+				"candidate_not_allowed",
+			)
+		}
 	}
-	return decodeMatches(response.Content)
+	return nil
 }
 
 type matchEnvelope struct {

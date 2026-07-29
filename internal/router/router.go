@@ -7,44 +7,79 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/llmharness"
 )
 
+// LLMTaskID is the stable identifier for top-level intent routing.
+const LLMTaskID = "router.route"
+
 type LLMRouter struct {
-	client llm.Client
+	harness *llmharness.Harness[Input, RouteResult]
 }
 
-func NewLLMRouter(client llm.Client) (*LLMRouter, error) {
+func NewLLMRouter(client llm.Client, policies ...llmharness.Policy) (*LLMRouter, error) {
 	if client == nil {
 		return nil, errors.New("router: llm client is required")
 	}
-	return &LLMRouter{client: client}, nil
+	policy, err := llmharness.ResolvePolicy(policies)
+	if err != nil {
+		return nil, err
+	}
+	harness, err := llmharness.New(client, routeTask(), policy)
+	if err != nil {
+		return nil, err
+	}
+	return &LLMRouter{harness: harness}, nil
 }
 
 func (r *LLMRouter) Route(ctx context.Context, input *Input) (*RouteResult, error) {
-	if input == nil || strings.TrimSpace(input.SourceText) == "" {
-		return nil, errors.New("router: input source_text is required")
+	result, err := r.harness.Run(ctx, &llmharness.RunRequest[Input]{Input: input})
+	if err != nil {
+		return nil, err
 	}
+	return result.Value, nil
+}
+
+func routeTask() llmharness.Task[Input, RouteResult] {
+	return llmharness.Task[Input, RouteResult]{
+		ID:               LLMTaskID,
+		PromptVersion:    "1.0.0",
+		SchemaVersion:    "router-output/1",
+		ValidatorVersion: "1.0.0",
+		ValidateInput:    validateRouteInput,
+		BuildRequest:     buildRouteRequest,
+		DecodeStrict:     decodeRouteResultStrict,
+		ValidateOutput:   validateRouteOutput,
+		RepairHint: func(string) string {
+			return "请重新返回完整 JSON；证据必须逐字引用 source_text，禁止改写或增加字段。"
+		},
+	}
+}
+
+func validateRouteInput(input *Input) error {
+	if input == nil || strings.TrimSpace(input.SourceText) == "" {
+		return errors.New("router: input source_text is required")
+	}
+	return nil
+}
+
+func buildRouteRequest(input *Input) (*llm.ChatRequest, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
-	response, err := r.client.Chat(ctx, &llm.ChatRequest{
-		Model:          llm.ModelConversation,
+	return &llm.ChatRequest{
 		System:         routeSystemPrompt,
 		Messages:       []llm.Message{{Role: llm.RoleUser, Content: string(payload)}},
 		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
-	})
-	if err != nil {
-		return nil, err
+	}, nil
+}
+
+func validateRouteOutput(input *Input, result *RouteResult) error {
+	if err := validateRouteEvidence(result, input.SourceText); err != nil {
+		return err
 	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
-		return nil, errors.New("router: empty response")
-	}
-	result, err := decodeRouteResult(response.Content, input.SourceText)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return nil
 }
 
 const routeSystemPrompt = `你是租车智能体的顶层多标签 Router。你的职责只有：判断本轮原文需要哪些 Action，并为每个 Action 引用用户原文证据。你不提取完整领域 JSON，不生成业务 ID、地点 ID、菜单 code、筛选 code 或服务端参数。

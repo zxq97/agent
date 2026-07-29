@@ -22,6 +22,7 @@ import (
 	"github.com/zxq97/agent/internal/domain/searchcar"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/httphandler"
+	"github.com/zxq97/agent/internal/llmharness"
 	"github.com/zxq97/agent/internal/orchestrator"
 	"github.com/zxq97/agent/internal/router"
 	"github.com/zxq97/agent/internal/searchplan"
@@ -53,11 +54,11 @@ func main() {
 
 	llmClient, err := llm.NewHTTPClient(&llm.HTTPConfig{Endpoint: cfg.LLM.Endpoint, APIKey: cfg.LLM.APIKey, TimeoutSec: cfg.LLM.TimeoutSec})
 	exitOn(err, "create llm client")
-	rentalExtractor, err := rentalcontext.NewLLMCommandExtractor(llmClient)
+	rentalExtractor, err := rentalcontext.NewLLMCommandExtractor(llmClient, buildHarnessPolicy(cfg.LLM.Harness, rentalcontext.LLMTaskID))
 	exitOn(err, "create rental context extractor")
-	requirementExtractor, err := vehiclerequirement.NewLLMExtractor(llmClient)
+	requirementExtractor, err := vehiclerequirement.NewLLMExtractor(llmClient, buildHarnessPolicy(cfg.LLM.Harness, vehiclerequirement.LLMTaskID))
 	exitOn(err, "create requirement extractor")
-	generalReplyHandler, err := generalreply.NewLLMHandler(llmClient)
+	generalReplyHandler, err := generalreply.NewLLMHandler(llmClient, buildHarnessPolicy(cfg.LLM.Harness, generalreply.LLMTaskID))
 	exitOn(err, "create general reply handler")
 
 	mapsClient := maps.NewHTTPClient(&maps.HTTPConfig{Endpoint: cfg.Maps.Endpoint, ProductID: cfg.Maps.ProductID, AccKey: cfg.Maps.AccKey, AppVersion: cfg.Maps.AppVersion, Platform: cfg.Maps.Platform, AppID: cfg.Maps.AppID, MapType: cfg.Maps.MapType, CoordinateType: cfg.Maps.CoordinateType, RequesterType: cfg.Maps.RequesterType, Lang: cfg.Maps.Lang, CallerID: cfg.Maps.CallerID, PlaceType: cfg.Maps.PlaceType})
@@ -68,12 +69,12 @@ func main() {
 	exitOn(err, "create rental context handler")
 	requirementHandler, err := vehiclerequirement.NewHandler(requirementExtractor, vehiclecatalog.NewDefaultCatalog())
 	exitOn(err, "create vehicle requirement handler")
-	capabilityMatcher, err := capability.NewLLMMatcher(llmClient)
+	capabilityMatcher, err := capability.NewLLMMatcher(llmClient, buildHarnessPolicy(cfg.LLM.Harness, capability.LLMTaskID))
 	exitOn(err, "create capability matcher")
 	capabilityResolver := capability.NewResolver(capability.NewDefaultCatalog(), capabilityMatcher)
 	searchHandler, err := searchcar.NewSearchCarHandler(guideClient, searchplan.NewCompiler(), time.Now, capabilityResolver)
 	exitOn(err, "create search car handler")
-	intentRouter, err := router.NewLLMRouter(llmClient)
+	intentRouter, err := router.NewLLMRouter(llmClient, buildHarnessPolicy(cfg.LLM.Harness, router.LLMTaskID))
 	exitOn(err, "create intent router")
 
 	turnOrchestrator := orchestrator.New(rentalHandler, requirementHandler, searchHandler, searchpolicy.New(1, time.Now), time.Now, generalReplyHandler)
@@ -99,6 +100,42 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "shutdown: %v\n", err)
+	}
+}
+
+func buildHarnessPolicy(cfg *config.LLMHarnessConfig, taskID string) llmharness.Policy {
+	policy := llmharness.DefaultPolicy()
+	if cfg == nil {
+		return policy
+	}
+	applyHarnessPolicy(&policy, &cfg.LLMHarnessPolicyConfig)
+	if taskPolicy := cfg.Tasks[taskID]; taskPolicy != nil {
+		applyHarnessPolicy(&policy, taskPolicy)
+	}
+	return policy
+}
+
+func applyHarnessPolicy(policy *llmharness.Policy, cfg *config.LLMHarnessPolicyConfig) {
+	if cfg.PrimaryModel != "" {
+		policy.PrimaryModel = cfg.PrimaryModel
+	}
+	if cfg.FallbackModel != "" {
+		policy.FallbackModel = cfg.FallbackModel
+	}
+	if cfg.RetryOnInvalid != nil {
+		policy.RetryOnInvalid = *cfg.RetryOnInvalid
+	}
+	if cfg.RetryOnEmpty != nil {
+		policy.RetryOnEmpty = *cfg.RetryOnEmpty
+	}
+	if cfg.RetryTransient != nil {
+		policy.RetryTransient = *cfg.RetryTransient
+	}
+	if cfg.MaxAttempts != 0 {
+		policy.MaxAttempts = cfg.MaxAttempts
+	}
+	if cfg.TotalTimeoutSec != 0 {
+		policy.TotalTimeout = time.Duration(cfg.TotalTimeoutSec) * time.Second
 	}
 }
 

@@ -15,9 +15,29 @@ type Config struct {
 }
 
 type LLMConfig struct {
-	Endpoint   string `yaml:"endpoint"`
-	APIKey     string `yaml:"api_key"`
-	TimeoutSec int    `yaml:"timeout_sec"`
+	Endpoint   string            `yaml:"endpoint"`
+	APIKey     string            `yaml:"api_key"`
+	TimeoutSec int               `yaml:"timeout_sec"`
+	Harness    *LLMHarnessConfig `yaml:"harness"`
+}
+
+// LLMHarnessConfig optionally overrides the safe in-process Harness defaults.
+// Tasks may override the default policy by stable LLM task ID.
+type LLMHarnessConfig struct {
+	LLMHarnessPolicyConfig `yaml:",inline"`
+	Tasks                  map[string]*LLMHarnessPolicyConfig `yaml:"tasks"`
+}
+
+// LLMHarnessPolicyConfig contains one default or task-specific policy.
+// Pointer booleans distinguish an omitted setting from an explicit false.
+type LLMHarnessPolicyConfig struct {
+	PrimaryModel    string `yaml:"primary_model"`
+	FallbackModel   string `yaml:"fallback_model"`
+	RetryOnInvalid  *bool  `yaml:"retry_on_invalid"`
+	RetryOnEmpty    *bool  `yaml:"retry_on_empty"`
+	RetryTransient  *bool  `yaml:"retry_transient"`
+	MaxAttempts     int    `yaml:"max_attempts"`
+	TotalTimeoutSec int    `yaml:"total_timeout_sec"`
 }
 
 // GuideConfig configures rental-guide quote and menu requests.

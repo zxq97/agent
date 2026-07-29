@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/zxq97/agent/internal/llmharness"
 )
 
 type extractResultEnvelope struct {
@@ -24,6 +25,17 @@ type extractedTimeEnvelope struct {
 }
 
 func decodeExtractResult(content string) (*RentalContextExtractResult, error) {
+	result, err := decodeExtractResultStrict(content)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateExtractResult(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func decodeExtractResultStrict(content string) (*RentalContextExtractResult, error) {
 	var envelope extractResultEnvelope
 	decoder := json.NewDecoder(bytes.NewBufferString(content))
 	decoder.DisallowUnknownFields()
@@ -53,9 +65,6 @@ func decodeExtractResult(content string) (*RentalContextExtractResult, error) {
 		ReturnTime:    ret,
 		DomainMatched: *envelope.DomainMatched,
 	}
-	if err := validateExtractResult(result); err != nil {
-		return nil, err
-	}
 	return result, nil
 }
 
@@ -69,6 +78,9 @@ func (e *extractedTimeEnvelope) result(field string) (ExtractedTime, error) {
 		if err := json.Unmarshal(e.Value, &parsed); err != nil {
 			return ExtractedTime{}, err
 		}
+		if _, err := time.Parse(time.RFC3339, parsed); err != nil {
+			return ExtractedTime{}, err
+		}
 		value = &parsed
 	}
 	return ExtractedTime{Status: *e.Status, Raw: *e.Raw, Value: value}, nil
@@ -76,7 +88,7 @@ func (e *extractedTimeEnvelope) result(field string) (ExtractedTime, error) {
 
 func validateExtractResult(result *RentalContextExtractResult) error {
 	if result == nil {
-		return errors.New("extraction result is required")
+		return retryableRentalOutputError("extraction result is required", "missing_result")
 	}
 	if err := validateExtractedTime("pickup_time", result.PickupTime); err != nil {
 		return err
@@ -87,12 +99,12 @@ func validateExtractResult(result *RentalContextExtractResult) error {
 	location := strings.TrimSpace(result.LocationQuery)
 	if !result.DomainMatched {
 		if location != "" || result.PickupTime.Status != ResolutionAbsent || result.ReturnTime.Status != ResolutionAbsent {
-			return errors.New("domain_matched=false requires empty location and absent times")
+			return retryableRentalOutputError("domain_matched=false requires empty location and absent times", "domain_state_conflict")
 		}
 		return nil
 	}
 	if location == "" && result.PickupTime.Status == ResolutionAbsent && result.ReturnTime.Status == ResolutionAbsent {
-		return errors.New("domain_matched=true requires at least one rental-context modification")
+		return retryableRentalOutputError("domain_matched=true requires at least one rental-context modification", "domain_state_conflict")
 	}
 	return nil
 }
@@ -102,21 +114,38 @@ func validateExtractedTime(field string, value ExtractedTime) error {
 	switch value.Status {
 	case ResolutionAbsent:
 		if raw != "" || value.Value != nil {
-			return errors.Errorf("%s status=absent requires raw empty and value null", field)
+			return retryableRentalOutputError(
+				errors.Errorf("%s status=absent requires raw empty and value null", field).Error(),
+				"time_state_conflict",
+			)
 		}
 	case ResolutionAmbiguous:
 		if raw == "" || value.Value != nil {
-			return errors.Errorf("%s status=ambiguous requires raw non-empty and value null", field)
+			return retryableRentalOutputError(
+				errors.Errorf("%s status=ambiguous requires raw non-empty and value null", field).Error(),
+				"time_state_conflict",
+			)
 		}
 	case ResolutionResolved:
 		if raw == "" || value.Value == nil {
-			return errors.Errorf("%s status=resolved requires raw and value", field)
-		}
-		if _, err := time.Parse(time.RFC3339, *value.Value); err != nil {
-			return err
+			return retryableRentalOutputError(
+				errors.Errorf("%s status=resolved requires raw and value", field).Error(),
+				"time_state_conflict",
+			)
 		}
 	default:
-		return errors.Errorf("%s has invalid status %q", field, value.Status)
+		return retryableRentalOutputError(
+			errors.Errorf("%s has invalid status %q", field, value.Status).Error(),
+			"time_state_conflict",
+		)
 	}
 	return nil
+}
+
+func retryableRentalOutputError(message, repairCode string) error {
+	return llmharness.NewOutputValidationError(
+		message,
+		llmharness.ValidationRetryableInvalid,
+		repairCode,
+	)
 }

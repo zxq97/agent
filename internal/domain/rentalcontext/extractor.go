@@ -7,43 +7,80 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/llmharness"
 )
 
 var ErrDomainMismatch = errors.New("input does not belong to modify rental context domain")
+
+// LLMTaskID is the stable identifier for rental-context extraction.
+const LLMTaskID = "rental_context.extract"
 
 type CommandExtractor interface {
 	Extract(context.Context, *ExtractionInput) (*RentalContextExtractResult, error)
 }
 
-type LLMCommandExtractor struct{ client llm.Client }
+type LLMCommandExtractor struct {
+	harness *llmharness.Harness[ExtractionInput, RentalContextExtractResult]
+}
 
-func NewLLMCommandExtractor(client llm.Client) (*LLMCommandExtractor, error) {
+func NewLLMCommandExtractor(client llm.Client, policies ...llmharness.Policy) (*LLMCommandExtractor, error) {
 	if client == nil {
 		return nil, errors.New("modify rental context: llm client is required")
 	}
-	return &LLMCommandExtractor{client: client}, nil
+	policy, err := llmharness.ResolvePolicy(policies)
+	if err != nil {
+		return nil, err
+	}
+	harness, err := llmharness.New(client, rentalExtractionTask(), policy)
+	if err != nil {
+		return nil, err
+	}
+	return &LLMCommandExtractor{harness: harness}, nil
 }
 
 func (e *LLMCommandExtractor) Extract(ctx context.Context, input *ExtractionInput) (*RentalContextExtractResult, error) {
-	if input == nil || strings.TrimSpace(input.SourceText) == "" {
-		return nil, errors.New("modify rental context: extraction input is required")
+	result, err := e.harness.Run(ctx, &llmharness.RunRequest[ExtractionInput]{Input: input})
+	if err != nil {
+		return nil, err
 	}
+	return result.Value, nil
+}
+
+func rentalExtractionTask() llmharness.Task[ExtractionInput, RentalContextExtractResult] {
+	return llmharness.Task[ExtractionInput, RentalContextExtractResult]{
+		ID:               LLMTaskID,
+		PromptVersion:    "1.0.0",
+		SchemaVersion:    "rental-context-output/1",
+		ValidatorVersion: "1.0.0",
+		ValidateInput:    validateRentalExtractionInput,
+		BuildRequest:     buildRentalExtractionRequest,
+		DecodeStrict:     decodeExtractResultStrict,
+		ValidateOutput: func(_ *ExtractionInput, result *RentalContextExtractResult) error {
+			return validateExtractResult(result)
+		},
+		RepairHint: func(string) string {
+			return "请重新返回全部固定字段；未修改的时间必须是 absent、raw 为空且 value 为 null。"
+		},
+	}
+}
+
+func validateRentalExtractionInput(input *ExtractionInput) error {
+	if input == nil || strings.TrimSpace(input.SourceText) == "" {
+		return errors.New("modify rental context: extraction input is required")
+	}
+	return nil
+}
+
+func buildRentalExtractionRequest(input *ExtractionInput) (*llm.ChatRequest, error) {
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
-	response, err := e.client.Chat(ctx, &llm.ChatRequest{Model: llm.ModelConversation, System: extractSystemPrompt, Messages: []llm.Message{{Role: llm.RoleUser, Content: string(payload)}}, ResponseFormat: &llm.ResponseFormat{Type: "json_object"}})
-	if err != nil {
-		return nil, err
-	}
-	if response == nil || strings.TrimSpace(response.Content) == "" {
-		return nil, errors.New("modify rental context: extractor returned empty content")
-	}
-	result, err := decodeExtractResult(response.Content)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return &llm.ChatRequest{
+		System:         extractSystemPrompt,
+		Messages:       []llm.Message{{Role: llm.RoleUser, Content: string(payload)}},
+		ResponseFormat: &llm.ResponseFormat{Type: "json_object"},
+	}, nil
 }
 
 const extractSystemPrompt = `你是租车取还条件提取器，只负责识别用户本轮是否修改租车地点、取车时间或还车时间。

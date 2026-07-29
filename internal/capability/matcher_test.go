@@ -27,3 +27,11 @@ func TestDecodeMatchesAllowsEmptyOrSingleCandidate(t *testing.T) {
 		t.Fatalf("matches=%#v err=%v", matches, err)
 	}
 }
+
+func TestValidateMatchesRejectsCandidateOutsideInput(t *testing.T) {
+	input := &MatchRequest{Candidates: []MatchCandidate{{ID: "allowed-a"}, {ID: "allowed-b"}}}
+	matches := []Match{{CapabilityID: "fabricated", Relation: "exact", Confidence: 0.9}}
+	if err := validateMatches(input, &matches); err == nil {
+		t.Fatal("expected candidate whitelist error")
+	}
+}

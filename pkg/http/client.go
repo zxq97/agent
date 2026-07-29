@@ -19,6 +19,26 @@ type Client struct {
 	hc *http.Client
 }
 
+// StatusError reports a non-success HTTP response created by this transport
+// layer. Callers may inspect StatusCode for retry classification.
+type StatusError struct {
+	StatusCode int
+	message    string
+}
+
+func (e *StatusError) Error() string {
+	return e.message
+}
+
+// ErrorStatusCode returns the HTTP status carried by a transport StatusError.
+func ErrorStatusCode(err error) (int, bool) {
+	statusError, ok := err.(*StatusError)
+	if !ok {
+		return 0, false
+	}
+	return statusError.StatusCode, true
+}
+
 type streamBody struct {
 	io.ReadCloser
 	onClose func()
@@ -90,7 +110,7 @@ func (c *Client) PostJSON(ctx context.Context, operation, url, bearerToken strin
 	}
 	responseForLog = string(responseBody)
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.Errorf("http %s: unexpected status %d: %s", operation, resp.StatusCode, truncateResponse(responseBody, 1024))
+		return nil, newStatusError(operation, resp.StatusCode, responseBody)
 	}
 	return responseBody, nil
 }
@@ -117,7 +137,7 @@ func (c *Client) PostJSONStream(ctx context.Context, operation, requestURL, bear
 		if readErr != nil {
 			return nil, readErr
 		}
-		return nil, errors.Errorf("http %s: unexpected status %d: %s", operation, resp.StatusCode, truncateResponse(raw, 1024))
+		return nil, newStatusError(operation, resp.StatusCode, raw)
 	}
 	return &streamBody{ReadCloser: resp.Body, onClose: func() {
 		log.Write(ctx, log.Entry{Component: "http", Operation: operation, Request: map[string]string{"method": http.MethodPost, "url": requestURL, "body": string(body)}, Response: map[string]any{"status_code": resp.StatusCode}, DurationMS: time.Since(start).Milliseconds()})
@@ -159,9 +179,17 @@ func (c *Client) Get(ctx context.Context, operation, requestURL string) (respons
 	}
 	responseForLog = string(responseBody)
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.Errorf("http %s: unexpected status %d", operation, resp.StatusCode)
+		return nil, newStatusError(operation, resp.StatusCode, nil)
 	}
 	return responseBody, nil
+}
+
+func newStatusError(operation string, statusCode int, body []byte) error {
+	message := errors.Errorf("http %s: unexpected status %d", operation, statusCode).Error()
+	if len(body) > 0 {
+		message = errors.Errorf("http %s: unexpected status %d: %s", operation, statusCode, truncateResponse(body, 1024)).Error()
+	}
+	return &StatusError{StatusCode: statusCode, message: message}
 }
 
 func redactURL(rawURL string) string {

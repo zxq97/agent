@@ -101,3 +101,18 @@ func TestExtractionInputContainsOpenRequirementContext(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRequirementExtractionOutputRejectsHistoryEcho(t *testing.T) {
+	input := &ExtractionInput{SourceText: "改成小米", RecentDomainHistory: []string{"之前想看丰田"}}
+	result := &ExtractResult{
+		DomainMatched: true,
+		Requirements: []Requirement{{
+			RawText:       "丰田",
+			Category:      requirement.CategoryVehicle,
+			CanonicalType: FacetBrand,
+		}},
+	}
+	if err := validateRequirementExtractionOutput(input, result); err == nil {
+		t.Fatal("expected raw-text evidence error")
+	}
+}
