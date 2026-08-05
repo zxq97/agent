@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/internal/capability"
 )
@@ -33,20 +34,17 @@ type ExecutionCompiler struct {
 	resolver capability.Resolver
 }
 
-func NewExecutionCompiler(legacy *Compiler, resolver capability.Resolver) *ExecutionCompiler {
+func NewExecutionCompiler(legacy *Compiler, resolver capability.Resolver) (*ExecutionCompiler, error) {
 	if legacy == nil {
-		legacy = NewCompiler()
+		return nil, errors.New("search plan execution compiler: filter compiler is required")
 	}
 	if resolver == nil {
-		resolver = capability.NewResolver(capability.NewDefaultCatalog(), nil)
+		return nil, errors.New("search plan execution compiler: capability resolver is required")
 	}
-	return &ExecutionCompiler{legacy: legacy, resolver: resolver}
+	return &ExecutionCompiler{legacy: legacy, resolver: resolver}, nil
 }
 
 func (c *ExecutionCompiler) CatalogVersion() string {
-	if c == nil || c.resolver == nil {
-		return ""
-	}
 	return c.resolver.CatalogVersion()
 }
 

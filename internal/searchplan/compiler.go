@@ -10,32 +10,43 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/guide"
 	"github.com/zxq97/agent/internal/vehiclecatalog"
 )
 
 type Compiler struct {
 	entities *vehiclecatalog.StaticCatalog
+	enums    ProviderEnumCatalog
 }
 
 func NewCompiler() *Compiler {
-	return NewCompilerWithVehicleCatalog(vehiclecatalog.NewDefaultCatalog())
+	return &Compiler{entities: vehiclecatalog.NewDefaultCatalog()}
 }
 
 // NewCompilerWithVehicleCatalog builds a compiler with the authoritative
 // catalog used to construct and verify vehicle-entity filters.
-func NewCompilerWithVehicleCatalog(entities *vehiclecatalog.StaticCatalog) *Compiler {
+func NewCompilerWithVehicleCatalog(entities *vehiclecatalog.StaticCatalog) (*Compiler, error) {
 	if entities == nil {
-		entities = vehiclecatalog.NewDefaultCatalog()
+		return nil, errors.New("search plan compiler: vehicle catalog is required")
 	}
-	return &Compiler{entities: entities}
+	return &Compiler{entities: entities}, nil
+}
+
+// NewCompilerWithProviderEnums enables local verification of provider integer
+// enum fields only when their meanings are supplied by an explicit contract.
+func NewCompilerWithProviderEnums(entities *vehiclecatalog.StaticCatalog, enums ProviderEnumCatalog) (*Compiler, error) {
+	if entities == nil {
+		return nil, errors.New("search plan compiler: vehicle catalog is required")
+	}
+	return &Compiler{entities: entities, enums: enums}, nil
 }
 
 func (c *Compiler) Compile(requirements []Requirement, menu []guide.MenuGroup) FilterPlan {
 	index := buildMenuIndex(menu)
 	redundant := redundantParents(requirements)
 	conflicts := conflictingRequirements(requirements)
-	plan := FilterPlan{}
+	plan := FilterPlan{ProviderEnumVersion: c.enums.Version}
 	for _, requirement := range requirements {
 		if requirement.Status == "removed" || requirement.Status == "superseded" {
 			continue
@@ -48,7 +59,7 @@ func (c *Compiler) Compile(requirements []Requirement, menu []guide.MenuGroup) F
 			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityAdvisory, "redundant_parent", "更具体的车辆实体已覆盖父级条件"))
 			continue
 		}
-		compileRequirement(&plan, requirement, index, c.entities)
+		compileRequirement(&plan, requirement, index, c.entities, c.enums)
 	}
 	plan.MenuFilters = uniqueMenuFilters(plan.MenuFilters)
 	plan.Disclosures = DisclosuresFromResolutions(plan.Resolutions)
@@ -197,7 +208,11 @@ func facetForCode(code string) string {
 	}
 }
 
-func compileRequirement(plan *FilterPlan, requirement Requirement, index menuIndex, entities *vehiclecatalog.StaticCatalog) {
+func compileRequirement(plan *FilterPlan, requirement Requirement, index menuIndex, entities *vehiclecatalog.StaticCatalog, enums ProviderEnumCatalog) {
+	if len(requirement.Alternatives) > 0 {
+		compileVehicleAnyOf(plan, requirement, entities)
+		return
+	}
 	if requirement.EntityResolution == "ambiguous" {
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityAmbiguous, "vehicle_entity_ambiguous", "车辆名称存在多个候选"))
 		return
@@ -206,11 +221,11 @@ func compileRequirement(plan *FilterPlan, requirement Requirement, index menuInd
 	case "seat_num":
 		compileSeat(plan, requirement, index)
 	case "vehicle_type":
-		compileNamedMenu(plan, requirement, index, vehicleTypeAliases)
+		compileNamedMenu(plan, requirement, index, vehicleTypeAliases, enums)
 	case "energy_type":
-		compileNamedMenu(plan, requirement, index, energyAliases)
+		compileNamedMenu(plan, requirement, index, energyAliases, enums)
 	case "transmission":
-		compileNamedMenu(plan, requirement, index, transmissionAliases)
+		compileNamedMenu(plan, requirement, index, transmissionAliases, enums)
 	case "car_age":
 		compileCarAge(plan, requirement, index)
 	case "price_preference":
@@ -224,6 +239,47 @@ func compileRequirement(plan *FilterPlan, requirement Requirement, index menuInd
 	default:
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnsupported, "facet_not_supported", "当前不支持该车辆诉求类型"))
 	}
+}
+
+func compileVehicleAnyOf(plan *FilterPlan, requirement Requirement, entities *vehiclecatalog.StaticCatalog) {
+	if requirement.Importance != "hard" {
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "soft_any_of_rank_not_supported", "多个车辆实体偏好的统一排序尚未实现"))
+		return
+	}
+	if len(requirement.Alternatives) < 2 {
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_any_of_incomplete", "任选诉求至少需要两个车辆实体"))
+		return
+	}
+	verifier := LocalVerifier{RequirementID: requirement.ID, Operator: "any_of"}
+	for _, alternative := range requirement.Alternatives {
+		if alternative.EntityResolution == "ambiguous" || strings.TrimSpace(alternative.EntityID) == "" {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_any_of_entity_unresolved", "至少一个品牌、车系或车型备选未经过车型库唯一确认"))
+			return
+		}
+		entity, ok := entities.EntityByID(alternative.EntityID)
+		if !ok || entity.Type != catalogTypeForFacet(alternative.Facet) {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_any_of_catalog_mismatch", "至少一个车辆备选与权威车型库不一致"))
+			return
+		}
+		expectedNames := []string{entity.CanonicalName}
+		if alternative.Facet == "vehicle_series" {
+			for _, model := range entities.ModelsBySeries(entity.ID) {
+				expectedNames = append(expectedNames, model.CanonicalName)
+				expectedNames = append(expectedNames, entities.ProviderNames(model.ID, "guide")...)
+			}
+		} else {
+			expectedNames = append(expectedNames, entities.ProviderNames(entity.ID, "guide")...)
+		}
+		verifier.Alternatives = append(verifier.Alternatives, LocalVerifier{
+			RequirementID: requirement.ID,
+			Facet:         alternative.Facet,
+			EntityID:      entity.ID,
+			ExpectedBrand: catalogEntityName(entities, entity.BrandID),
+			ExpectedNames: uniqueStrings(expectedNames),
+		})
+	}
+	plan.LocalVerifiers = append(plan.LocalVerifiers, verifier)
+	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "local_vehicle_any_of", "Guide 布尔语义尚未确认，本次在已收集候选中按品牌、车系或车型任选关系做本地严格校验"))
 }
 
 func compileSeat(plan *FilterPlan, requirement Requirement, index menuIndex) {
@@ -324,14 +380,35 @@ func seatPrefilter(item indexedMenuItem, target int, operator string) (indexedMe
 	return indexedMenuItem{}, 0, false
 }
 
-func compileNamedMenu(plan *FilterPlan, requirement Requirement, index menuIndex, aliases map[string]string) {
+func compileNamedMenu(plan *FilterPlan, requirement Requirement, index menuIndex, aliases map[string]string, enums ProviderEnumCatalog) {
 	if requirement.Importance == "soft" {
-		switch requirement.Facet {
-		case "energy_type", "transmission":
-			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "enum_rank_not_confirmed", "Guide 枚举尚未确认，不能可靠进行本地排序"))
-		default:
-			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "vehicle_type_rank_not_supported", "当前车辆类别只支持筛选，不支持可靠排序"))
+		target := requirement.CanonicalValue
+		if alias := aliases[normalize(target)]; alias != "" {
+			target = alias
 		}
+		switch requirement.Facet {
+		case "energy_type":
+			values := enums.Values(requirement.Facet, target)
+			if len(values) == 0 {
+				plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "enum_rank_not_confirmed", "Guide 能源枚举尚未确认，不能可靠进行本地排序"))
+				return
+			}
+			plan.RankFactors = append(plan.RankFactors, RankFactor{RequirementID: requirement.ID, Type: RankPreferredEnergy, Value: target, Weight: 1, DataField: "vehicle.fuel_type", ProviderValues: values})
+		case "transmission":
+			values := enums.Values(requirement.Facet, target)
+			if len(values) == 0 {
+				plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "enum_rank_not_confirmed", "Guide 挡位枚举尚未确认，不能可靠进行本地排序"))
+				return
+			}
+			plan.RankFactors = append(plan.RankFactors, RankFactor{RequirementID: requirement.ID, Type: RankPreferredTransmission, Value: target, Weight: 1, DataField: "vehicle.transmission_type", ProviderValues: values})
+		case "vehicle_type":
+			plan.RankFactors = append(plan.RankFactors, RankFactor{RequirementID: requirement.ID, Type: RankPreferredVehicleType, Value: target, Weight: 1, DataField: "vehicle.group_name"})
+		}
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityRankable, "quote_rank", "使用 Guide 返回的车辆事实对当前候选集进行归一化偏好排序"))
+		return
+	}
+	if requirement.Operator == "not_eq" || requirement.Operator == "not_in" {
+		compileNegativeNamedValue(plan, requirement, aliases, enums)
 		return
 	}
 	if requirement.Operator != "eq" && requirement.Operator != "in" {
@@ -348,6 +425,34 @@ func compileNamedMenu(plan *FilterPlan, requirement Requirement, index menuIndex
 		return
 	}
 	addMenuFilter(plan, requirement, item)
+}
+
+func compileNegativeNamedValue(plan *FilterPlan, requirement Requirement, aliases map[string]string, enums ProviderEnumCatalog) {
+	target := requirement.CanonicalValue
+	if alias := aliases[normalize(target)]; alias != "" {
+		target = alias
+	}
+	verifier := LocalVerifier{
+		RequirementID: requirement.ID,
+		Facet:         requirement.Facet,
+		Operator:      "not_in",
+		Value:         target,
+	}
+	switch requirement.Facet {
+	case "vehicle_type":
+		verifier.ExpectedNames = []string{target}
+	case "energy_type", "transmission":
+		verifier.ProviderValues = enums.Values(requirement.Facet, target)
+		if len(verifier.ProviderValues) == 0 {
+			plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnverifiable, "provider_enum_mapping_missing", "Guide 返回的是整数枚举，但当前没有已确认的版本化枚举映射"))
+			return
+		}
+	default:
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnsupported, "negative_local_filter_not_supported", "当前字段不能可靠执行本地排除"))
+		return
+	}
+	plan.LocalVerifiers = append(plan.LocalVerifiers, verifier)
+	plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "local_negative_filter", "使用 Guide 返回的车辆事实执行本地严格排除，字段未知的报价不会作为满足"))
 }
 
 func compileCarAge(plan *FilterPlan, requirement Requirement, index menuIndex) {
@@ -637,7 +742,8 @@ func compileVehicleEntity(plan *FilterPlan, requirement Requirement, entities *v
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityRankable, "quote_rank", "使用 Guide 返回的车辆名称字段在当前候选集中排序"))
 		return
 	}
-	if requirement.Operator != "eq" && requirement.Operator != "in" {
+	negative := requirement.Operator == "not_eq" || requirement.Operator == "not_in"
+	if requirement.Operator != "eq" && requirement.Operator != "in" && !negative {
 		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityUnsupported, "vehicle_entity_operator_not_supported", "Guide 车辆实体筛选当前只支持正向等值条件"))
 		return
 	}
@@ -654,6 +760,20 @@ func compileVehicleEntity(plan *FilterPlan, requirement Requirement, entities *v
 	value := strings.TrimSpace(entity.CanonicalName)
 	brandName := catalogEntityName(entities, entity.BrandID)
 	expectedNames := []string{value}
+	if negative {
+		providerNames := entities.ProviderNames(entity.ID, "guide")
+		expectedNames = append(expectedNames, providerNames...)
+		plan.LocalVerifiers = append(plan.LocalVerifiers, LocalVerifier{
+			RequirementID: requirement.ID,
+			Facet:         requirement.Facet,
+			EntityID:      entity.ID,
+			ExpectedBrand: brandName,
+			ExpectedNames: uniqueStrings(expectedNames),
+			Operator:      "not_in",
+		})
+		plan.Resolutions = append(plan.Resolutions, resolution(requirement, CapabilityVerifiable, "local_negative_filter", "使用 Guide 返回的品牌和车型事实执行本地严格排除，字段未知的报价不会作为满足"))
+		return
+	}
 	if requirement.Facet == "vehicle_series" {
 		expectedNames = nil
 		filterCount := len(plan.MenuFilters)
@@ -726,9 +846,6 @@ func catalogTypeForFacet(facet string) vehiclecatalog.EntityType {
 }
 
 func catalogEntityName(entities *vehiclecatalog.StaticCatalog, entityID string) string {
-	if entities == nil {
-		return ""
-	}
 	entity, ok := entities.EntityByID(entityID)
 	if !ok {
 		return ""
@@ -871,6 +988,7 @@ func planHash(plan FilterPlan) string {
 		RankFactors           []RankFactor
 		ExploratoryRanks      []ExploratoryRank
 		RelaxedRequirementIDs []string
+		ProviderEnumVersion   string
 	}
 	input := hashInput{
 		MenuFilters:           append([]MenuFilter(nil), plan.MenuFilters...),
@@ -880,6 +998,7 @@ func planHash(plan FilterPlan) string {
 		RankFactors:           append([]RankFactor(nil), plan.RankFactors...),
 		ExploratoryRanks:      append([]ExploratoryRank(nil), plan.ExploratoryRanks...),
 		RelaxedRequirementIDs: append([]string(nil), plan.RelaxedRequirementIDs...),
+		ProviderEnumVersion:   plan.ProviderEnumVersion,
 	}
 	sort.Slice(input.MenuFilters, func(i, j int) bool { return input.MenuFilters[i].Code < input.MenuFilters[j].Code })
 	sort.Slice(input.QuoteFilters, func(i, j int) bool {

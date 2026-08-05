@@ -10,12 +10,13 @@ import (
 	"github.com/zxq97/agent/api/llm"
 	"github.com/zxq97/agent/api/maps"
 	"github.com/zxq97/agent/internal/config"
+	"github.com/zxq97/agent/internal/domain"
 	"github.com/zxq97/agent/internal/session"
 )
 
 const rentalContextTestConfigPath = "../../../conf/dev.yaml"
 
-func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
+func TestHandlerWithRemoteServices(t *testing.T) {
 	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
 		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real LLM and Maps integration tests")
 	}
@@ -30,7 +31,7 @@ func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extractor, err := NewLLMCommandExtractor(client)
+	extractor, err := NewExtractor(client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewModifyRentalContextHandler(extractor, mapClient, funcID("remote-pending"), time.Now, zone, DefaultAmbiguityConfig())
+	handler, err := NewHandler(extractor, mapClient, funcID("remote-pending"), time.Now, zone, DefaultAmbiguityConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
 	defer cancel()
 
 	t.Run("time only", func(t *testing.T) {
-		result, err := handler.Handle(ctx, &session.AgentSession{}, &ModifyRentalContextInput{SourceText: "明天下午3点取车"})
+		result, err := handler.Handle(ctx, &session.AgentSession{}, &Input{SourceText: "明天下午3点取车"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +58,7 @@ func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
 	})
 
 	t.Run("multi area", func(t *testing.T) {
-		result, err := handler.Handle(ctx, &session.AgentSession{}, &ModifyRentalContextInput{SourceText: "换到南京路"})
+		result, err := handler.Handle(ctx, &session.AgentSession{}, &Input{SourceText: "换到南京路"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,9 +68,9 @@ func TestModifyRentalContextHandlerWithRemoteServices(t *testing.T) {
 	})
 
 	t.Run("domain mismatch", func(t *testing.T) {
-		_, err := handler.Handle(ctx, &session.AgentSession{}, &ModifyRentalContextInput{SourceText: "找300以内SUV"})
-		if err != ErrDomainMismatch {
-			t.Fatalf("error = %v, want %v", err, ErrDomainMismatch)
+		_, err := handler.Handle(ctx, &session.AgentSession{}, &Input{SourceText: "找300以内SUV"})
+		if err != domain.ErrDomainMismatch {
+			t.Fatalf("error = %v, want %v", err, domain.ErrDomainMismatch)
 		}
 	})
 }

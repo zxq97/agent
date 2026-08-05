@@ -22,3 +22,48 @@ func TestApplyLocalVerifiersRejectsSeatAndTotalPriceMismatch(t *testing.T) {
 		t.Fatalf("unexpected verification: %#v %#v", filtered, report)
 	}
 }
+
+func TestApplyLocalVerifiersRejectsExcludedAndUnknownEnumValues(t *testing.T) {
+	values := []guide.VehRate{
+		{Vehicle: &guide.Vehicle{VehicleCode: "fuel", FuelType: 1}},
+		{Vehicle: &guide.Vehicle{VehicleCode: "electric", FuelType: 2}},
+		{Vehicle: &guide.Vehicle{VehicleCode: "unknown"}},
+	}
+	filtered, report := ApplyLocalVerifiers(values, []LocalVerifier{{
+		RequirementID: "no-fuel", Facet: "energy_type", Operator: "not_in", ProviderValues: []int{1},
+	}})
+	if len(filtered) != 1 || filtered[0].Vehicle.VehicleCode != "electric" ||
+		report.ByRequirement["no-fuel"].Mismatch != 1 ||
+		report.ByRequirement["no-fuel"].Unknown != 1 {
+		t.Fatalf("unexpected negative verification: %#v %#v", filtered, report)
+	}
+}
+
+func TestApplyLocalVerifiersRejectsExcludedBrand(t *testing.T) {
+	filtered, report := ApplyLocalVerifiers([]guide.VehRate{
+		{Vehicle: &guide.Vehicle{BrandName: "特斯拉"}},
+		{Vehicle: &guide.Vehicle{BrandName: "比亚迪"}},
+		{},
+	}, []LocalVerifier{{
+		RequirementID: "no-tesla", Facet: "brand", Operator: "not_in", ExpectedNames: []string{"特斯拉"},
+	}})
+	if len(filtered) != 1 || filtered[0].Vehicle.BrandName != "比亚迪" ||
+		report.ByRequirement["no-tesla"].Mismatch != 1 ||
+		report.ByRequirement["no-tesla"].Unknown != 1 {
+		t.Fatalf("unexpected brand exclusion: %#v %#v", filtered, report)
+	}
+}
+
+func TestRerankNormalizesDifferentFactorScales(t *testing.T) {
+	values := []guide.VehRate{
+		{Vehicle: &guide.Vehicle{VehicleCode: "cheap", BrandName: "其他"}, TotalCharge: &guide.TotalCharge{TotalAmount: 100}},
+		{Vehicle: &guide.Vehicle{VehicleCode: "preferred", BrandName: "特斯拉"}, TotalCharge: &guide.TotalCharge{TotalAmount: 200}},
+	}
+	ranked := Rerank(values, []RankFactor{
+		{Type: RankPriceLow, Weight: 1},
+		{Type: RankPreferredBrand, Value: "特斯拉", Weight: 2},
+	})
+	if ranked[0].Vehicle.VehicleCode != "preferred" {
+		t.Fatalf("factor scales were not normalized: %#v", ranked)
+	}
+}

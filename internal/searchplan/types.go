@@ -22,6 +22,7 @@ type Requirement struct {
 	RawValue       string
 	CanonicalValue string
 	Operator       string
+	Relation       string
 	Importance     string
 	Status         string
 
@@ -34,6 +35,18 @@ type Requirement struct {
 	SemanticLabel string
 	Category      requirement.Category
 	Value         requirement.Value
+	Alternatives  []RequirementAlternative
+}
+
+type RequirementAlternative struct {
+	Facet            string
+	RawValue         string
+	CanonicalValue   string
+	EntityID         string
+	EntityType       string
+	EntityBrandID    string
+	EntityParentID   string
+	EntityResolution string
 }
 
 type MenuFilter struct {
@@ -53,15 +66,43 @@ type QuoteFilter struct {
 // LocalVerifier validates that a quote returned for a remote filter still
 // satisfies the deterministic requirement.
 type LocalVerifier struct {
-	RequirementID string
-	Facet         string
-	EntityID      string
-	ExpectedBrand string
-	ExpectedNames []string
-	Operator      string
-	Value         string
-	MinValue      string
-	MaxValue      string
+	RequirementID  string
+	Facet          string
+	EntityID       string
+	ExpectedBrand  string
+	ExpectedNames  []string
+	Operator       string
+	Value          string
+	MinValue       string
+	MaxValue       string
+	ProviderValues []int
+	Alternatives   []LocalVerifier
+}
+
+// ProviderEnumCatalog is a versioned, explicit mapping from Guide integer
+// enums to canonical business values. Empty mappings mean "unknown"; callers
+// must never guess provider enum meanings.
+type ProviderEnumCatalog struct {
+	Version           string
+	FuelTypes         map[string][]int
+	TransmissionTypes map[string][]int
+}
+
+func (c ProviderEnumCatalog) Values(facet, canonicalValue string) []int {
+	key := normalizeQuoteText(canonicalValue)
+	var source map[string][]int
+	switch facet {
+	case "energy_type":
+		source = c.FuelTypes
+	case "transmission":
+		source = c.TransmissionTypes
+	}
+	for value, providerValues := range source {
+		if normalizeQuoteText(value) == key {
+			return append([]int(nil), providerValues...)
+		}
+	}
+	return nil
 }
 
 // VehicleVerifier is kept as a source-compatible alias while callers migrate
@@ -73,6 +114,8 @@ type DisclosureKind string
 const (
 	DisclosureHardUnmapped      DisclosureKind = "hard_unmapped"
 	DisclosureHardRelaxed       DisclosureKind = "hard_relaxed"
+	DisclosureSoftUnmapped      DisclosureKind = "soft_unmapped"
+	DisclosureLocallyExcluded   DisclosureKind = "locally_excluded"
 	DisclosureExploratoryRanked DisclosureKind = "exploratory_ranked"
 	DisclosureVerifierMismatch  DisclosureKind = "verifier_mismatch"
 )
@@ -90,18 +133,22 @@ type Disclosure struct {
 type RankFactorType string
 
 const (
-	RankPriceLow       RankFactorType = "price_low"
-	RankSeatsTarget    RankFactorType = "seats_target"
-	RankPreferredBrand RankFactorType = "preferred_brand"
-	RankPreferredModel RankFactorType = "preferred_model"
+	RankPriceLow              RankFactorType = "price_low"
+	RankSeatsTarget           RankFactorType = "seats_target"
+	RankPreferredBrand        RankFactorType = "preferred_brand"
+	RankPreferredModel        RankFactorType = "preferred_model"
+	RankPreferredEnergy       RankFactorType = "preferred_energy"
+	RankPreferredTransmission RankFactorType = "preferred_transmission"
+	RankPreferredVehicleType  RankFactorType = "preferred_vehicle_type"
 )
 
 type RankFactor struct {
-	RequirementID string
-	Type          RankFactorType
-	Value         string
-	Weight        float64
-	DataField     string
+	RequirementID  string
+	Type           RankFactorType
+	Value          string
+	Weight         float64
+	DataField      string
+	ProviderValues []int
 }
 
 // ExploratoryRank describes a versioned scenario scorer. It may change order,
@@ -138,9 +185,10 @@ type FilterPlan struct {
 
 	RelaxedRequirementIDs []string
 
-	CapabilityVersion  string
-	RuntimeFingerprint string
-	PlanHash           string
+	CapabilityVersion   string
+	ProviderEnumVersion string
+	RuntimeFingerprint  string
+	PlanHash            string
 }
 
 func (p FilterPlan) HasLocalVerification() bool {

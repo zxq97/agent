@@ -20,13 +20,18 @@ const maxComparedOptions = 4
 
 var numberPattern = regexp.MustCompile(`\d+`)
 
-type Handler struct{}
-
-func New() *Handler {
-	return &Handler{}
+// Handler compares vehicles already present in the active search result.
+type Handler interface {
+	Handle(context.Context, *session.AgentSession, *Input) (*Result, error)
 }
 
-func (h *Handler) Handle(ctx context.Context, agentSession *session.AgentSession, input *Input) (*Result, error) {
+type handler struct{}
+
+func NewHandler() Handler {
+	return &handler{}
+}
+
+func (h *handler) Handle(ctx context.Context, agentSession *session.AgentSession, input *Input) (*Result, error) {
 	if agentSession == nil {
 		return nil, errors.New("vehicle compare: session is required")
 	}

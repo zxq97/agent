@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/internal/capability"
 	"github.com/zxq97/agent/internal/config"
 	"github.com/zxq97/agent/internal/searchplan"
 	"github.com/zxq97/agent/internal/session"
@@ -22,14 +24,14 @@ func TestRemoteSearchUsesIsolatedBaselineAndContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := guide.NewHTTPClient(&guide.HTTPConfig{Endpoint: cfg.Guide.Endpoint, Phone: cfg.Guide.Phone, TimeoutSec: cfg.Guide.Timeout})
-	handler, err := NewSearchCarHandler(client, searchplan.NewCompiler(), time.Now)
+	searchHandler, err := NewHandler(client, searchplan.NewCompiler(), time.Now, remoteCapabilityResolver(t, cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
 	agentSession := remoteSearchSession()
 	ctx := log.WithTraceID(context.Background(), "remote-search-pipeline")
 
-	first, err := handler.Handle(ctx, agentSession, &SearchCarInput{Operation: OperationSearchNow, PageSize: 10})
+	first, err := searchHandler.Handle(ctx, agentSession, &Input{Operation: OperationSearchNow, PageSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +45,7 @@ func TestRemoteSearchUsesIsolatedBaselineAndContinuation(t *testing.T) {
 	baselineMenuCount := len(agentSession.Search.Baseline.Menu)
 
 	if first.Status == ResultSuccess || first.Status == ResultPartial {
-		next, err := handler.Handle(ctx, agentSession, &SearchCarInput{Operation: OperationNextBatch, PageSize: 10})
+		next, err := searchHandler.Handle(ctx, agentSession, &Input{Operation: OperationNextBatch, PageSize: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,7 +68,7 @@ func TestRemoteSearchCompilesSeatFromBaselineMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := guide.NewHTTPClient(&guide.HTTPConfig{Endpoint: cfg.Guide.Endpoint, Phone: cfg.Guide.Phone, TimeoutSec: cfg.Guide.Timeout})
-	handler, err := NewSearchCarHandler(client, searchplan.NewCompiler(), time.Now)
+	searchHandler, err := NewHandler(client, searchplan.NewCompiler(), time.Now, remoteCapabilityResolver(t, cfg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +79,7 @@ func TestRemoteSearchCompilesSeatFromBaselineMenu(t *testing.T) {
 		Operator: "eq", Importance: "hard", Status: "active",
 	}}
 	ctx := log.WithTraceID(context.Background(), "remote-search-seat")
-	result, err := handler.Handle(ctx, agentSession, &SearchCarInput{Operation: OperationSearchNow, PageSize: 10})
+	result, err := searchHandler.Handle(ctx, agentSession, &Input{Operation: OperationSearchNow, PageSize: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +89,11 @@ func TestRemoteSearchCompilesSeatFromBaselineMenu(t *testing.T) {
 	if agentSession.Search.ActiveSearch == nil {
 		t.Fatalf("missing active search: result=%#v", result)
 	}
-	executionPlan := handler.compileExecutionPlan(ctx, agentSession, agentSession.Search.Baseline)
+	implementation, ok := searchHandler.(*handler)
+	if !ok {
+		t.Fatalf("handler type = %T", searchHandler)
+	}
+	executionPlan := implementation.compileExecutionPlan(ctx, agentSession, agentSession.Search.Baseline)
 	if len(executionPlan.FilterPlan.FilterCodes()) != 1 || executionPlan.FilterPlan.FilterCodes()[0] != "filter/seat_num/7" {
 		t.Fatalf("unexpected compiled plan: result=%#v snapshot=%#v", result, agentSession.Search.ActiveSearch)
 	}
@@ -98,6 +104,27 @@ func requireRemoteGuide(t *testing.T) {
 	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
 		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real Guide integration tests")
 	}
+}
+
+func remoteCapabilityResolver(t *testing.T, cfg *config.Config) capability.Resolver {
+	t.Helper()
+	client, err := llm.NewHTTPClient(&llm.HTTPConfig{
+		Endpoint:   cfg.LLM.Endpoint,
+		APIKey:     cfg.LLM.APIKey,
+		TimeoutSec: cfg.LLM.TimeoutSec,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matcher, err := capability.NewLLMMatcher(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := capability.NewResolver(capability.NewDefaultCatalog(), matcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolver
 }
 
 func remoteSearchSession() *session.AgentSession {

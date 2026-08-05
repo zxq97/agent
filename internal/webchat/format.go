@@ -82,6 +82,8 @@ func formatTurn(state *session.AgentSession, turn *orchestrator.TurnResult) Turn
 		switch failed.ReasonCode {
 		case "search_external_failure":
 			parts = append(parts, "已保留确认过的条件，但搜车服务暂时不可用，可以稍后直接重试搜索。")
+		case "search_invalid_context":
+			parts = append(parts, "当前取还时间或城市信息不完整，无法开始搜车；请修改取车时间、还车时间或地点后再试。")
 		case "requirement_extraction_failed":
 			parts = append(parts, "已保留其他确认过的条件，但这次车辆要求没有可靠识别，请换一种说法再试。")
 		}
@@ -148,7 +150,7 @@ func rentalRuleViews(values []rentalrules.Rule) []RentalRuleView {
 	return result
 }
 
-func requirementResolutionViews(result *searchcar.SearchCarResult) []RequirementResolutionView {
+func requirementResolutionViews(result *searchcar.Result) []RequirementResolutionView {
 	if result == nil {
 		return nil
 	}

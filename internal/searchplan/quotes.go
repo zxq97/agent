@@ -87,6 +87,21 @@ func ApplyVehicleVerifiers(values []guide.VehRate, verifiers []VehicleVerifier) 
 
 // VerifyLocal checks one quote against one deterministic postcondition.
 func VerifyLocal(value guide.VehRate, verifier LocalVerifier) VehicleVerificationStatus {
+	if len(verifier.Alternatives) > 0 {
+		hasUnknown := false
+		for _, alternative := range verifier.Alternatives {
+			switch VerifyLocal(value, alternative) {
+			case VehicleVerificationMatch:
+				return VehicleVerificationMatch
+			case VehicleVerificationUnknown:
+				hasUnknown = true
+			}
+		}
+		if hasUnknown {
+			return VehicleVerificationUnknown
+		}
+		return VehicleVerificationMismatch
+	}
 	switch verifier.Facet {
 	case "seat_num":
 		if value.Vehicle == nil || value.Vehicle.Seats <= 0 {
@@ -112,6 +127,24 @@ func VerifyLocal(value guide.VehRate, verifier LocalVerifier) VehicleVerificatio
 		return verifyNumericValue(value.DailyDeductionAmount, verifier)
 	case "brand", "vehicle_series", "vehicle_model":
 		return VerifyVehicle(value, verifier)
+	case "vehicle_type":
+		if value.Vehicle == nil || strings.TrimSpace(value.Vehicle.GroupName) == "" || len(verifier.ExpectedNames) == 0 {
+			return VehicleVerificationUnknown
+		}
+		return verificationForExpectedMatch(
+			matchesExpectedName(value.Vehicle.GroupName, verifier.ExpectedNames, true),
+			verifier.Operator,
+		)
+	case "energy_type":
+		if value.Vehicle == nil || value.Vehicle.FuelType <= 0 || len(verifier.ProviderValues) == 0 {
+			return VehicleVerificationUnknown
+		}
+		return verificationForExpectedMatch(containsInt(verifier.ProviderValues, value.Vehicle.FuelType), verifier.Operator)
+	case "transmission":
+		if value.Vehicle == nil || value.Vehicle.TransmissionType <= 0 || len(verifier.ProviderValues) == 0 {
+			return VehicleVerificationUnknown
+		}
+		return verificationForExpectedMatch(containsInt(verifier.ProviderValues, value.Vehicle.TransmissionType), verifier.Operator)
 	default:
 		return VehicleVerificationUnknown
 	}
@@ -150,10 +183,10 @@ func VerifyVehicle(value guide.VehRate, verifier VehicleVerifier) VehicleVerific
 		if vehicle.BrandName == "" {
 			return VehicleVerificationUnknown
 		}
-		if matchesExpectedName(vehicle.BrandName, verifier.ExpectedNames, false) {
-			return VehicleVerificationMatch
-		}
-		return VehicleVerificationMismatch
+		return verificationForExpectedMatch(
+			matchesExpectedName(vehicle.BrandName, verifier.ExpectedNames, false),
+			verifier.Operator,
+		)
 	}
 	if verifier.Facet != "vehicle_series" && verifier.Facet != "vehicle_model" {
 		return VehicleVerificationUnknown
@@ -163,17 +196,34 @@ func VerifyVehicle(value guide.VehRate, verifier VehicleVerifier) VehicleVerific
 			return VehicleVerificationUnknown
 		}
 		if normalizeQuoteText(vehicle.BrandName) != normalizeQuoteText(verifier.ExpectedBrand) {
-			return VehicleVerificationMismatch
+			return verificationForExpectedMatch(false, verifier.Operator)
 		}
 	}
 	if vehicle.VehicleName == "" && vehicle.GroupName == "" {
 		return VehicleVerificationUnknown
 	}
-	if matchesExpectedName(vehicle.VehicleName, verifier.ExpectedNames, true) ||
-		matchesExpectedName(vehicle.GroupName, verifier.ExpectedNames, true) {
-		return VehicleVerificationMatch
+	return verificationForExpectedMatch(
+		matchesExpectedName(vehicle.VehicleName, verifier.ExpectedNames, true) ||
+			matchesExpectedName(vehicle.GroupName, verifier.ExpectedNames, true),
+		verifier.Operator,
+	)
+}
+
+func verificationForExpectedMatch(expectedMatch bool, operator string) VehicleVerificationStatus {
+	negative := operator == "not_eq" || operator == "not_in"
+	if expectedMatch == negative {
+		return VehicleVerificationMismatch
 	}
-	return VehicleVerificationMismatch
+	return VehicleVerificationMatch
+}
+
+func containsInt(values []int, target int) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesExpectedName(actual string, expected []string, contains bool) bool {
@@ -198,8 +248,9 @@ func Rerank(values []guide.VehRate, factors []RankFactor) []guide.VehRate {
 	if len(factors) == 0 {
 		return result
 	}
+	prices := priceBounds(result)
 	sort.SliceStable(result, func(i, j int) bool {
-		return quoteScore(result[i], factors) > quoteScore(result[j], factors)
+		return quoteScore(result[i], factors, prices) > quoteScore(result[j], factors, prices)
 	})
 	return result
 }
@@ -303,36 +354,107 @@ func compareText(actual, target, operator string, contains bool) bool {
 	}
 }
 
-func quoteScore(value guide.VehRate, factors []RankFactor) float64 {
-	var score float64
-	for _, factor := range factors {
-		switch factor.Type {
-		case RankPriceLow:
-			if value.TotalCharge != nil {
-				score -= value.TotalCharge.TotalAmount * factor.Weight
-			}
-		case RankSeatsTarget:
-			if value.Vehicle == nil {
-				continue
-			}
-			target, err := strconv.Atoi(factor.Value)
-			if err == nil {
-				score -= math.Abs(float64(value.Vehicle.Seats-target)) * factor.Weight
-				if value.Vehicle.Seats == target {
-					score += 100 * factor.Weight
-				}
-			}
-		case RankPreferredBrand:
-			if value.Vehicle != nil && normalizeQuoteText(value.Vehicle.BrandName) == normalizeQuoteText(factor.Value) {
-				score += 100 * factor.Weight
-			}
-		case RankPreferredModel:
-			if value.Vehicle != nil && strings.Contains(normalizeQuoteText(value.Vehicle.VehicleName), normalizeQuoteText(factor.Value)) {
-				score += 100 * factor.Weight
-			}
+type numericBounds struct {
+	minimum float64
+	maximum float64
+	valid   bool
+}
+
+func priceBounds(values []guide.VehRate) numericBounds {
+	bounds := numericBounds{minimum: math.MaxFloat64, maximum: -math.MaxFloat64}
+	for _, value := range values {
+		if value.TotalCharge == nil || value.TotalCharge.TotalAmount < 0 {
+			continue
 		}
+		bounds.valid = true
+		bounds.minimum = math.Min(bounds.minimum, value.TotalCharge.TotalAmount)
+		bounds.maximum = math.Max(bounds.maximum, value.TotalCharge.TotalAmount)
 	}
-	return score
+	return bounds
+}
+
+func quoteScore(value guide.VehRate, factors []RankFactor, prices numericBounds) float64 {
+	var weightedScore float64
+	var totalWeight float64
+	for _, factor := range factors {
+		if factor.Weight <= 0 {
+			continue
+		}
+		factorScore, available := rankFactorScore(value, factor, prices)
+		if !available {
+			continue
+		}
+		weightedScore += factorScore * factor.Weight
+		totalWeight += factor.Weight
+	}
+	if totalWeight == 0 {
+		return 0
+	}
+	return weightedScore / totalWeight
+}
+
+func rankFactorScore(value guide.VehRate, factor RankFactor, prices numericBounds) (float64, bool) {
+	switch factor.Type {
+	case RankPriceLow:
+		if value.TotalCharge == nil || !prices.valid {
+			return 0, false
+		}
+		if prices.maximum == prices.minimum {
+			return 1, true
+		}
+		return (prices.maximum - value.TotalCharge.TotalAmount) / (prices.maximum - prices.minimum), true
+	case RankSeatsTarget:
+		if value.Vehicle == nil || value.Vehicle.Seats <= 0 {
+			return 0, false
+		}
+		target, err := strconv.Atoi(factor.Value)
+		if err != nil {
+			return 0, false
+		}
+		return 1 / (1 + math.Abs(float64(value.Vehicle.Seats-target))), true
+	case RankPreferredBrand:
+		if value.Vehicle == nil || strings.TrimSpace(value.Vehicle.BrandName) == "" {
+			return 0, false
+		}
+		if normalizeQuoteText(value.Vehicle.BrandName) == normalizeQuoteText(factor.Value) {
+			return 1, true
+		}
+		return 0, true
+	case RankPreferredModel:
+		if value.Vehicle == nil || strings.TrimSpace(value.Vehicle.VehicleName) == "" {
+			return 0, false
+		}
+		if strings.Contains(normalizeQuoteText(value.Vehicle.VehicleName), normalizeQuoteText(factor.Value)) {
+			return 1, true
+		}
+		return 0, true
+	case RankPreferredEnergy:
+		if value.Vehicle == nil || value.Vehicle.FuelType <= 0 || len(factor.ProviderValues) == 0 {
+			return 0, false
+		}
+		if containsInt(factor.ProviderValues, value.Vehicle.FuelType) {
+			return 1, true
+		}
+		return 0, true
+	case RankPreferredTransmission:
+		if value.Vehicle == nil || value.Vehicle.TransmissionType <= 0 || len(factor.ProviderValues) == 0 {
+			return 0, false
+		}
+		if containsInt(factor.ProviderValues, value.Vehicle.TransmissionType) {
+			return 1, true
+		}
+		return 0, true
+	case RankPreferredVehicleType:
+		if value.Vehicle == nil || strings.TrimSpace(value.Vehicle.GroupName) == "" {
+			return 0, false
+		}
+		if matchesExpectedName(value.Vehicle.GroupName, []string{factor.Value}, true) {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, false
+	}
 }
 
 func normalizeQuoteText(value string) string {

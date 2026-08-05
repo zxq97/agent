@@ -15,7 +15,7 @@ import (
 
 func TestFormatTurnExposesExecutedAndUnresolvedRequirements(t *testing.T) {
 	response := formatTurn(&session.AgentSession{}, &orchestrator.TurnResult{
-		SearchCar: &searchcar.SearchCarResult{
+		SearchCar: &searchcar.Result{
 			Status: searchcar.ResultPartial,
 			AppliedRequirements: []searchcar.RequirementResult{{
 				ID: "seat", RawText: "7座", Status: "filterable",
@@ -87,7 +87,7 @@ func TestCloneTurnResponseDeepCopiesComparison(t *testing.T) {
 
 func TestFormatTurnAlwaysIncludesRequiredDisclosure(t *testing.T) {
 	response := formatTurn(&session.AgentSession{}, &orchestrator.TurnResult{
-		SearchCar: &searchcar.SearchCarResult{
+		SearchCar: &searchcar.Result{
 			Status: searchcar.ResultPartial,
 			Disclosures: []searchplan.Disclosure{{
 				RequirementID: "elderly",
@@ -108,7 +108,7 @@ func TestFormatTurnExposesVehicleLocalVerifier(t *testing.T) {
 		Capability: searchplan.CapabilityFilterable,
 	}
 	response := formatTurn(&session.AgentSession{}, &orchestrator.TurnResult{
-		SearchCar: &searchcar.SearchCarResult{
+		SearchCar: &searchcar.Result{
 			Status:                      searchcar.ResultSuccess,
 			AppliedRequirements:         []searchcar.RequirementResult{requirement},
 			LocallyVerifiedRequirements: []searchcar.RequirementResult{requirement},

@@ -46,16 +46,10 @@ func guidanceRule(id, title, guidance string) Rule {
 }
 
 func (c *StaticCatalog) Version() string {
-	if c == nil {
-		return ""
-	}
 	return c.version
 }
 
 func (c *StaticCatalog) Search(query string) []Rule {
-	if c == nil {
-		return nil
-	}
 	query = normalizeRuleQuery(query)
 	var result []Rule
 	for _, rule := range c.rules {

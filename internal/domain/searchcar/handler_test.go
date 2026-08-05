@@ -6,10 +6,54 @@ import (
 	"time"
 
 	"github.com/zxq97/agent/api/guide"
+	"github.com/zxq97/agent/internal/capability"
 	"github.com/zxq97/agent/internal/searchplan"
 	"github.com/zxq97/agent/internal/searchruntime"
 	"github.com/zxq97/agent/internal/session"
 )
+
+type noMatchCapabilityMatcher struct{}
+
+func (noMatchCapabilityMatcher) Match(context.Context, *capability.MatchRequest) ([]capability.Match, error) {
+	return nil, nil
+}
+
+func testCapabilityResolver(t *testing.T) capability.Resolver {
+	t.Helper()
+	resolver, err := capability.NewResolver(capability.NewDefaultCatalog(), noMatchCapabilityMatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolver
+}
+
+func testExecutionCompiler(t *testing.T) *searchplan.ExecutionCompiler {
+	t.Helper()
+	compiler, err := searchplan.NewExecutionCompiler(searchplan.NewCompiler(), testCapabilityResolver(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiler
+}
+
+func TestNewHandlerRequiresDependencies(t *testing.T) {
+	client := guide.NewHTTPClient(&guide.HTTPConfig{Endpoint: "http://unused.invalid"})
+	compiler := searchplan.NewCompiler()
+	resolver := testCapabilityResolver(t)
+
+	if _, err := NewHandler(nil, compiler, time.Now, resolver); err == nil {
+		t.Fatal("expected missing guide client error")
+	}
+	if _, err := NewHandler(client, nil, time.Now, resolver); err == nil {
+		t.Fatal("expected missing filter compiler error")
+	}
+	if _, err := NewHandler(client, compiler, nil, resolver); err == nil {
+		t.Fatal("expected missing clock error")
+	}
+	if _, err := NewHandler(client, compiler, time.Now, nil); err == nil {
+		t.Fatal("expected missing capability resolver error")
+	}
+}
 
 func TestMissingContext(t *testing.T) {
 	now := time.Now()
@@ -20,7 +64,7 @@ func TestMissingContext(t *testing.T) {
 	}{
 		{name: "all", want: []SearchMissingField{MissingLocation, MissingPickupTime, MissingReturnTime}},
 		{name: "pickup", state: session.SearchState{Location: &session.LocationRef{}, ReturnTime: &now}, want: []SearchMissingField{MissingPickupTime}},
-		{name: "complete", state: session.SearchState{Location: &session.LocationRef{}, PickupTime: timePtr(now.Add(time.Hour)), ReturnTime: timePtr(now.Add(2 * time.Hour))}},
+		{name: "complete", state: session.SearchState{Location: &session.LocationRef{CityID: "110000"}, PickupTime: timePtr(now.Add(time.Hour)), ReturnTime: timePtr(now.Add(2 * time.Hour))}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -32,6 +76,18 @@ func TestMissingContext(t *testing.T) {
 				t.Fatalf("got %#v want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateRentalContextRejectsInvalidCityID(t *testing.T) {
+	now := time.Now()
+	state := session.SearchState{
+		Location:   &session.LocationRef{CityID: "not-a-city"},
+		PickupTime: timePtr(now.Add(time.Hour)),
+		ReturnTime: timePtr(now.Add(2 * time.Hour)),
+	}
+	if _, err := validateRentalContext(state, now); err != ErrInvalidCityID {
+		t.Fatalf("error=%v want=%v", err, ErrInvalidCityID)
 	}
 }
 
@@ -62,7 +118,7 @@ func TestBuildSearchRequest(t *testing.T) {
 }
 
 func TestSaveResults(t *testing.T) {
-	handler := &SearchCarHandler{}
+	handler := &handler{}
 	agentSession := &session.AgentSession{}
 	handler.saveResults(agentSession, []guide.VehRate{{SupplierCode: "supplier", Vehicle: &guide.Vehicle{VehicleCode: "car-1", VehicleName: "SUV"}, ReferenceInfo: &guide.RefInfo{ReferenceID: "ref"}}})
 	if len(agentSession.Search.LastResults) != 1 || agentSession.Search.LastResults[0].VehicleCode != "car-1" || agentSession.Search.LastResults[0].ReferenceID != "ref" {
@@ -99,7 +155,7 @@ func TestSnapshotValidationRejectsChangedRequirementsAndExpiredContext(t *testin
 		Location: &session.LocationRef{ID: "poi"}, PickupTime: &pickup, ReturnTime: &returnTime,
 		RequirementVersion: 2, Baseline: &session.GuideBaselineCache{},
 	}
-	handler := &SearchCarHandler{compiler: searchplan.NewExecutionCompiler(searchplan.NewCompiler(), nil)}
+	handler := &handler{compiler: testExecutionCompiler(t)}
 	runtime := handler.runtimeCapabilityContext(state, state.Baseline)
 	runtimeFingerprint := searchplan.RuntimeFingerprint(runtime)
 	executionPlan := handler.compileExecutionPlan(context.Background(), &session.AgentSession{Search: state}, state.Baseline)

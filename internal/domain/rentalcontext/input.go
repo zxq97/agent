@@ -2,8 +2,8 @@ package rentalcontext
 
 import "time"
 
-type ModifyRentalContextInput struct {
+type Input struct {
 	SourceText string
-	Command    *ModifyRentalContextCommand
+	Command    *Command
 	ReceivedAt time.Time
 }

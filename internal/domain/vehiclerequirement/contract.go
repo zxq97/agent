@@ -24,9 +24,16 @@ type requirementEnvelope struct {
 	CanonicalType json.RawMessage        `json:"canonical_type"`
 	Value         json.RawMessage        `json:"value"`
 	Operation     *Operation             `json:"operation"`
-	Operator      *Operator              `json:"operator"`
+	Relation      *ConstraintRelation    `json:"relation"`
+	Alternatives  []alternativeEnvelope  `json:"alternatives"`
 	Importance    *Importance            `json:"importance"`
 	Confidence    *float64               `json:"confidence"`
+	EntityContext *entityContextEnvelope `json:"entity_context"`
+}
+
+type alternativeEnvelope struct {
+	CanonicalType json.RawMessage        `json:"canonical_type"`
+	Value         json.RawMessage        `json:"value"`
 	EntityContext *entityContextEnvelope `json:"entity_context"`
 }
 
@@ -107,9 +114,9 @@ func validateExtractResultState(result *ExtractResult) error {
 func (e requirementEnvelope) result() (Requirement, error) {
 	if e.RawText == nil || e.SemanticLabel == nil || e.Category == nil ||
 		len(e.CanonicalType) == 0 || len(e.Value) == 0 || e.Operation == nil ||
-		e.Operator == nil || e.Importance == nil || e.Confidence == nil ||
+		e.Relation == nil || e.Importance == nil || e.Confidence == nil ||
 		e.EntityContext == nil {
-		return Requirement{}, errors.New("raw_text, semantic_label, category, canonical_type, value, operation, operator, importance, confidence and entity_context are required")
+		return Requirement{}, errors.New("raw_text, semantic_label, category, canonical_type, value, operation, relation, importance, confidence and entity_context are required")
 	}
 	if e.EntityContext.BrandHint == nil || e.EntityContext.SeriesHint == nil {
 		return Requirement{}, errors.New("entity_context.brand_hint and entity_context.series_hint are required")
@@ -129,7 +136,8 @@ func (e requirementEnvelope) result() (Requirement, error) {
 		CanonicalType: canonicalType,
 		Value:         value,
 		Operation:     *e.Operation,
-		Operator:      *e.Operator,
+		Relation:      *e.Relation,
+		Operator:      operatorForRelation(*e.Relation),
 		Importance:    *e.Importance,
 		Confidence:    *e.Confidence,
 		EntityContext: EntityContext{
@@ -137,12 +145,42 @@ func (e requirementEnvelope) result() (Requirement, error) {
 			SeriesHint: strings.TrimSpace(*e.EntityContext.SeriesHint),
 		},
 	}
+	for _, alternative := range e.Alternatives {
+		value, err := alternative.result()
+		if err != nil {
+			return Requirement{}, err
+		}
+		result.Alternatives = append(result.Alternatives, value)
+	}
 	result.Facet = result.CanonicalType
 	result.RawValue = rawValue(result.Value)
 	if err := validateRequirement(result); err != nil {
 		return Requirement{}, err
 	}
 	return result, nil
+}
+
+func (e alternativeEnvelope) result() (ConstraintAlternative, error) {
+	if len(e.CanonicalType) == 0 || len(e.Value) == 0 || e.EntityContext == nil ||
+		e.EntityContext.BrandHint == nil || e.EntityContext.SeriesHint == nil {
+		return ConstraintAlternative{}, errors.New("alternative canonical_type, value and entity_context are required")
+	}
+	canonicalType, err := decodeCanonicalType(e.CanonicalType)
+	if err != nil {
+		return ConstraintAlternative{}, err
+	}
+	value, err := decodeRequirementValue(e.Value)
+	if err != nil {
+		return ConstraintAlternative{}, err
+	}
+	return ConstraintAlternative{
+		CanonicalType: canonicalType,
+		Value:         value,
+		EntityContext: EntityContext{
+			BrandHint:  strings.TrimSpace(*e.EntityContext.BrandHint),
+			SeriesHint: strings.TrimSpace(*e.EntityContext.SeriesHint),
+		},
+	}, nil
 }
 
 func decodeCanonicalType(data json.RawMessage) (Facet, error) {
@@ -242,11 +280,11 @@ func validateRequirement(value Requirement) error {
 	default:
 		return errors.Errorf("invalid operation %q", value.Operation)
 	}
-	switch value.Operator {
-	case OperatorEQ, OperatorNotEQ, OperatorGT, OperatorGTE, OperatorLT,
-		OperatorLTE, OperatorIN, OperatorNotIN, OperatorContains:
+	switch value.Relation {
+	case RelationExact, RelationAtLeast, RelationAtMost, RelationRange,
+		RelationExclude, RelationAnyOf:
 	default:
-		return errors.Errorf("invalid operator %q", value.Operator)
+		return errors.Errorf("invalid relation %q", value.Relation)
 	}
 	switch value.Importance {
 	case ImportanceHard, ImportanceSoft:
@@ -264,10 +302,47 @@ func validateRequirement(value Requirement) error {
 			return err
 		}
 	}
+	if value.Relation == RelationRange && value.Value.Kind != requirement.ValueRange {
+		return errors.New("range relation requires a range value")
+	}
+	if value.Relation == RelationAnyOf {
+		if len(value.Alternatives) < 2 || value.CanonicalType != "" || value.Value.Kind != requirement.ValueNone {
+			return errors.New("any_of requires at least two alternatives and no top-level canonical value")
+		}
+		for _, alternative := range value.Alternatives {
+			switch alternative.CanonicalType {
+			case FacetBrand, FacetVehicleSeries, FacetVehicleModel:
+			default:
+				return errors.New("any_of currently supports only brand, vehicle_series and vehicle_model alternatives")
+			}
+			if alternative.Value.Kind != requirement.ValueText {
+				return errors.New("vehicle any_of alternatives require text values")
+			}
+		}
+	} else if len(value.Alternatives) > 0 {
+		return errors.New("alternatives are allowed only with relation=any_of")
+	}
 	if value.Confidence < 0 || value.Confidence > 1 {
 		return errors.New("confidence must be between 0 and 1")
 	}
 	return nil
+}
+
+func operatorForRelation(value ConstraintRelation) Operator {
+	switch value {
+	case RelationAtLeast:
+		return OperatorGTE
+	case RelationAtMost:
+		return OperatorLTE
+	case RelationRange:
+		return OperatorIN
+	case RelationExclude:
+		return OperatorNotEQ
+	case RelationAnyOf:
+		return OperatorIN
+	default:
+		return OperatorEQ
+	}
 }
 
 func validateCanonicalValueKind(canonicalType Facet, kind requirement.ValueKind) error {

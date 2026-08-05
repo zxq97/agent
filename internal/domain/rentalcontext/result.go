@@ -24,7 +24,7 @@ const (
 	ModifiedReturnTime ModifiedField = "return_time"
 )
 
-type ModifyRentalContextResult struct {
+type Result struct {
 	Status          ResultStatus
 	Location        *maps.Candidate
 	PickupTime      *time.Time

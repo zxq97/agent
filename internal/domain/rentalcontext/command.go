@@ -7,7 +7,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-type ModifyRentalContextCommand struct {
+type Command struct {
 	LocationQuery string
 	LocationID    string
 	PickupTime    *time.Time
@@ -15,7 +15,7 @@ type ModifyRentalContextCommand struct {
 	InteractionID string
 }
 
-func ValidateExtractedCommand(command *ModifyRentalContextCommand) error {
+func ValidateExtractedCommand(command *Command) error {
 	if command == nil {
 		return errors.New("modify rental context: command is required")
 	}
@@ -29,6 +29,6 @@ func ValidateExtractedCommand(command *ModifyRentalContextCommand) error {
 	return nil
 }
 
-func (c *ModifyRentalContextCommand) hasModification() bool {
+func (c *Command) hasModification() bool {
 	return c != nil && (c.LocationQuery != "" || c.LocationID != "" || c.PickupTime != nil || c.ReturnTime != nil)
 }

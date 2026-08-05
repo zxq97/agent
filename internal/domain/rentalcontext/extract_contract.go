@@ -24,7 +24,7 @@ type extractedTimeEnvelope struct {
 	Value  json.RawMessage   `json:"value"`
 }
 
-func decodeExtractResult(content string) (*RentalContextExtractResult, error) {
+func decodeExtractResult(content string) (*ExtractResult, error) {
 	result, err := decodeExtractResultStrict(content)
 	if err != nil {
 		return nil, err
@@ -35,7 +35,7 @@ func decodeExtractResult(content string) (*RentalContextExtractResult, error) {
 	return result, nil
 }
 
-func decodeExtractResultStrict(content string) (*RentalContextExtractResult, error) {
+func decodeExtractResultStrict(content string) (*ExtractResult, error) {
 	var envelope extractResultEnvelope
 	decoder := json.NewDecoder(bytes.NewBufferString(content))
 	decoder.DisallowUnknownFields()
@@ -59,7 +59,7 @@ func decodeExtractResultStrict(content string) (*RentalContextExtractResult, err
 	if err != nil {
 		return nil, err
 	}
-	result := &RentalContextExtractResult{
+	result := &ExtractResult{
 		LocationQuery: *envelope.LocationQuery,
 		PickupTime:    pickup,
 		ReturnTime:    ret,
@@ -86,7 +86,7 @@ func (e *extractedTimeEnvelope) result(field string) (ExtractedTime, error) {
 	return ExtractedTime{Status: *e.Status, Raw: *e.Raw, Value: value}, nil
 }
 
-func validateExtractResult(result *RentalContextExtractResult) error {
+func validateExtractResult(result *ExtractResult) error {
 	if result == nil {
 		return retryableRentalOutputError("extraction result is required", "missing_result")
 	}

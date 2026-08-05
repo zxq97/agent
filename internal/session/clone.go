@@ -61,6 +61,7 @@ func cloneRequirements(values []SearchRequirementStateItem) []SearchRequirementS
 	for index := range values {
 		result[index] = values[index]
 		result[index].Value = cloneRequirementValue(values[index].Value)
+		result[index].Alternatives = append([]SearchRequirementAlternative(nil), values[index].Alternatives...)
 	}
 	return result
 }

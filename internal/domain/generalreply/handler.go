@@ -17,11 +17,11 @@ const maxRecentMessages = 6
 // LLMTaskID is the stable identifier for read-only general replies.
 const LLMTaskID = "general_reply.generate"
 
-type LLMHandler struct {
+type handler struct {
 	harness *llmharness.Harness[promptInput, Result]
 }
 
-func NewLLMHandler(client llm.Client, policies ...llmharness.Policy) (*LLMHandler, error) {
+func NewHandler(client llm.Client, policies ...llmharness.Policy) (Handler, error) {
 	if client == nil {
 		return nil, errors.New("general reply: llm client is required")
 	}
@@ -33,10 +33,10 @@ func NewLLMHandler(client llm.Client, policies ...llmharness.Policy) (*LLMHandle
 	if err != nil {
 		return nil, err
 	}
-	return &LLMHandler{harness: harness}, nil
+	return &handler{harness: harness}, nil
 }
 
-func (h *LLMHandler) Handle(ctx context.Context, agentSession *session.AgentSession, input *Input) (*Result, error) {
+func (h *handler) Handle(ctx context.Context, agentSession *session.AgentSession, input *Input) (*Result, error) {
 	if agentSession == nil {
 		return nil, errors.New("general reply: session is required")
 	}

@@ -11,7 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zxq97/agent/internal/domain"
+	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
+	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
+	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/orchestrator"
 	"github.com/zxq97/agent/internal/router"
 	"github.com/zxq97/agent/internal/searchpolicy"
@@ -22,8 +28,26 @@ import (
 
 type noMatchRental struct{}
 
-func (noMatchRental) Handle(context.Context, *session.AgentSession, *rentalcontext.ModifyRentalContextInput) (*rentalcontext.ModifyRentalContextResult, error) {
-	return nil, rentalcontext.ErrDomainMismatch
+func (noMatchRental) Handle(context.Context, *session.AgentSession, *rentalcontext.Input) (*rentalcontext.Result, error) {
+	return nil, domain.ErrDomainMismatch
+}
+
+type noMatchRequirement struct{}
+
+func (noMatchRequirement) Handle(context.Context, *session.AgentSession, *vehiclerequirement.Input) (*vehiclerequirement.Result, error) {
+	return nil, domain.ErrDomainMismatch
+}
+
+type noOpSearch struct{}
+
+func (noOpSearch) Handle(context.Context, *session.AgentSession, *searchcar.Input) (*searchcar.Result, error) {
+	return &searchcar.Result{Status: searchcar.ResultNeedsContext}, nil
+}
+
+type staticGeneralReply struct{}
+
+func (staticGeneralReply) Handle(_ context.Context, _ *session.AgentSession, input *generalreply.Input) (*generalreply.Result, error) {
+	return &generalreply.Result{Message: "通用回复：" + input.SourceText}, nil
 }
 
 type generalOnlyRouter struct{}
@@ -32,11 +56,38 @@ func (generalOnlyRouter) Route(_ context.Context, input *router.Input) (*router.
 	return &router.RouteResult{Candidates: []router.RouteCandidate{{Action: router.ActionGeneralReply, EvidenceText: input.SourceText, Confidence: 1}}}, nil
 }
 
+func newTestRentalRulesHandler() rentalrules.Handler {
+	handler, err := rentalrules.NewHandler(rentalrules.NewDefaultCatalog())
+	if err != nil {
+		panic(err)
+	}
+	return handler
+}
+
+func TestNewRequiresLogger(t *testing.T) {
+	if _, err := New(&webchat.Service{}, nil); err == nil {
+		t.Fatal("expected missing logger error")
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	turnOrchestrator, err := orchestrator.NewWithExtensions(
+		noMatchRental{},
+		noMatchRequirement{},
+		noOpSearch{},
+		searchpolicy.New(1, func() time.Time { return now }),
+		func() time.Time { return now },
+		staticGeneralReply{},
+		vehiclecompare.NewHandler(),
+		newTestRentalRulesHandler(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	service, err := webchat.NewService(
-		orchestrator.New(noMatchRental{}, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }),
+		turnOrchestrator,
 		generalOnlyRouter{},
 		webchat.NewMemoryStore(func() time.Time { return now }),
 		func() time.Time { return now },

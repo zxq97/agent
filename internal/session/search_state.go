@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"time"
 
 	"github.com/zxq97/agent/internal/requirement"
@@ -60,6 +61,7 @@ type SearchRequirementStateItem struct {
 	Value          requirement.Value
 
 	Operator   string
+	Relation   string
 	Importance string
 	Status     string
 
@@ -70,6 +72,18 @@ type SearchRequirementStateItem struct {
 	EntityResolution string
 	ResolutionReason string
 	CatalogVersion   string
+	Alternatives     []SearchRequirementAlternative
+}
+
+type SearchRequirementAlternative struct {
+	Facet            string `json:"facet"`
+	RawValue         string `json:"raw_value"`
+	CanonicalValue   string `json:"canonical_value"`
+	EntityID         string `json:"-"`
+	EntityType       string `json:"-"`
+	EntityBrandID    string `json:"-"`
+	EntityParentID   string `json:"-"`
+	EntityResolution string `json:"-"`
 }
 
 func (r SearchRequirementStateItem) DisplayType() string {
@@ -86,6 +100,17 @@ func (r SearchRequirementStateItem) DisplayType() string {
 }
 
 func (r SearchRequirementStateItem) DisplayValue() string {
+	if len(r.Alternatives) > 0 {
+		values := make([]string, 0, len(r.Alternatives))
+		for _, alternative := range r.Alternatives {
+			if alternative.CanonicalValue != "" {
+				values = append(values, alternative.CanonicalValue)
+			}
+		}
+		if len(values) > 0 {
+			return strings.Join(values, " 或 ")
+		}
+	}
 	if r.CanonicalValue != "" {
 		return r.CanonicalValue
 	}

@@ -1,7 +1,6 @@
 package rentalcontext
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 
@@ -10,44 +9,23 @@ import (
 	"github.com/zxq97/agent/internal/llmharness"
 )
 
-var ErrDomainMismatch = errors.New("input does not belong to modify rental context domain")
-
 // LLMTaskID is the stable identifier for rental-context extraction.
 const LLMTaskID = "rental_context.extract"
 
-type CommandExtractor interface {
-	Extract(context.Context, *ExtractionInput) (*RentalContextExtractResult, error)
-}
+type Extractor = llmharness.Extractor[ExtractionInput, ExtractResult]
 
-type LLMCommandExtractor struct {
-	harness *llmharness.Harness[ExtractionInput, RentalContextExtractResult]
-}
-
-func NewLLMCommandExtractor(client llm.Client, policies ...llmharness.Policy) (*LLMCommandExtractor, error) {
-	if client == nil {
-		return nil, errors.New("modify rental context: llm client is required")
-	}
+// NewExtractor creates the rental-context extractor while keeping its prompt,
+// decoder, and validator in this domain package.
+func NewExtractor(client llm.Client, policies ...llmharness.Policy) (Extractor, error) {
 	policy, err := llmharness.ResolvePolicy(policies)
 	if err != nil {
 		return nil, err
 	}
-	harness, err := llmharness.New(client, rentalExtractionTask(), policy)
-	if err != nil {
-		return nil, err
-	}
-	return &LLMCommandExtractor{harness: harness}, nil
+	return llmharness.NewExtractor(client, rentalExtractionTask(), policy)
 }
 
-func (e *LLMCommandExtractor) Extract(ctx context.Context, input *ExtractionInput) (*RentalContextExtractResult, error) {
-	result, err := e.harness.Run(ctx, &llmharness.RunRequest[ExtractionInput]{Input: input})
-	if err != nil {
-		return nil, err
-	}
-	return result.Value, nil
-}
-
-func rentalExtractionTask() llmharness.Task[ExtractionInput, RentalContextExtractResult] {
-	return llmharness.Task[ExtractionInput, RentalContextExtractResult]{
+func rentalExtractionTask() llmharness.Task[ExtractionInput, ExtractResult] {
+	return llmharness.Task[ExtractionInput, ExtractResult]{
 		ID:               LLMTaskID,
 		PromptVersion:    "1.0.0",
 		SchemaVersion:    "rental-context-output/1",
@@ -55,7 +33,7 @@ func rentalExtractionTask() llmharness.Task[ExtractionInput, RentalContextExtrac
 		ValidateInput:    validateRentalExtractionInput,
 		BuildRequest:     buildRentalExtractionRequest,
 		DecodeStrict:     decodeExtractResultStrict,
-		ValidateOutput: func(_ *ExtractionInput, result *RentalContextExtractResult) error {
+		ValidateOutput: func(_ *ExtractionInput, result *ExtractResult) error {
 			return validateExtractResult(result)
 		},
 		RepairHint: func(string) string {

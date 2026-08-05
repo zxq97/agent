@@ -8,6 +8,12 @@ import (
 	"github.com/zxq97/agent/internal/vehiclecatalog"
 )
 
+func TestNewCompilerWithVehicleCatalogRequiresCatalog(t *testing.T) {
+	if _, err := NewCompilerWithVehicleCatalog(nil); err == nil {
+		t.Fatal("expected missing vehicle catalog error")
+	}
+}
+
 func TestCompilerUsesFacetCodePrefixes(t *testing.T) {
 	compiler := NewCompiler()
 	plan := compiler.Compile([]Requirement{
@@ -17,6 +23,112 @@ func TestCompilerUsesFacetCodePrefixes(t *testing.T) {
 	codes := plan.FilterCodes()
 	if len(codes) != 2 || codes[0] != "filter/seat_num/7" || codes[1] != "filter/fuel/electric" {
 		t.Fatalf("unexpected plan: %#v", plan)
+	}
+}
+
+func TestCompilerBuildsHardNegativeEnumFilterFromConfirmedMapping(t *testing.T) {
+	compiler, err := NewCompilerWithProviderEnums(vehiclecatalog.NewDefaultCatalog(), ProviderEnumCatalog{
+		Version:   "guide-enums-test-v1",
+		FuelTypes: map[string][]int{"汽油": {1, 3}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := compiler.Compile([]Requirement{{
+		ID: "no-fuel", Facet: "energy_type", RawText: "不要燃油车", CanonicalValue: "汽油",
+		Operator: "not_eq", Importance: "hard", Status: "active",
+	}}, baselineMenu())
+	if len(plan.FilterCodes()) != 0 || len(plan.LocalVerifiers) != 1 ||
+		plan.LocalVerifiers[0].Operator != "not_in" ||
+		len(plan.LocalVerifiers[0].ProviderValues) != 2 ||
+		plan.Resolutions[0].Capability != CapabilityVerifiable {
+		t.Fatalf("unexpected negative plan: %#v", plan)
+	}
+}
+
+func TestCompilerDoesNotGuessMissingProviderEnumMapping(t *testing.T) {
+	plan := NewCompiler().Compile([]Requirement{{
+		ID: "no-manual", Facet: "transmission", RawText: "不要手动挡", CanonicalValue: "手动挡",
+		Operator: "not_eq", Importance: "hard", Status: "active",
+	}}, baselineMenu())
+	if len(plan.LocalVerifiers) != 0 || len(plan.Resolutions) != 1 ||
+		plan.Resolutions[0].ReasonCode != "provider_enum_mapping_missing" {
+		t.Fatalf("unexpected unresolved enum plan: %#v", plan)
+	}
+}
+
+func TestCompilerRanksSoftEnergyWithConfirmedMapping(t *testing.T) {
+	compiler, err := NewCompilerWithProviderEnums(vehiclecatalog.NewDefaultCatalog(), ProviderEnumCatalog{
+		Version:   "guide-enums-test-v1",
+		FuelTypes: map[string][]int{"纯电动": {2}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := compiler.Compile([]Requirement{{
+		ID: "prefer-electric", Facet: "energy_type", RawText: "最好纯电", CanonicalValue: "纯电",
+		Operator: "eq", Importance: "soft", Status: "active",
+	}}, baselineMenu())
+	if len(plan.FilterCodes()) != 0 || len(plan.RankFactors) != 1 ||
+		plan.RankFactors[0].Type != RankPreferredEnergy ||
+		plan.Resolutions[0].Capability != CapabilityRankable {
+		t.Fatalf("unexpected soft energy plan: %#v", plan)
+	}
+}
+
+func TestProviderEnumVersionParticipatesInPlanHash(t *testing.T) {
+	compile := func(version string) FilterPlan {
+		compiler, err := NewCompilerWithProviderEnums(vehiclecatalog.NewDefaultCatalog(), ProviderEnumCatalog{
+			Version: version, FuelTypes: map[string][]int{"汽油": {1}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return compiler.Compile([]Requirement{{
+			ID: "no-fuel", Facet: "energy_type", RawText: "不要燃油车", CanonicalValue: "汽油",
+			Operator: "not_eq", Importance: "hard", Status: "active",
+		}}, baselineMenu())
+	}
+	first := compile("guide-enums-v1")
+	second := compile("guide-enums-v2")
+	if first.PlanHash == second.PlanHash || first.ProviderEnumVersion != "guide-enums-v1" {
+		t.Fatalf("provider enum version missing from plan identity: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestCompilerBuildsHardNegativeBrandFilter(t *testing.T) {
+	plan := NewCompiler().Compile([]Requirement{{
+		ID: "no-tesla", Facet: "brand", RawText: "不要特斯拉", CanonicalValue: "特斯拉",
+		Operator: "not_eq", Importance: "hard", Status: "active", EntityID: "brand:tesla",
+	}}, baselineMenu())
+	if len(plan.FilterCodes()) != 0 || len(plan.LocalVerifiers) != 1 ||
+		plan.LocalVerifiers[0].Operator != "not_in" ||
+		plan.Resolutions[0].Capability != CapabilityVerifiable {
+		t.Fatalf("unexpected negative brand plan: %#v", plan)
+	}
+}
+
+func TestCompilerBuildsCrossLevelVehicleAnyOfVerifier(t *testing.T) {
+	plan := NewCompiler().Compile([]Requirement{{
+		ID: "vehicle-or", Facet: "vehicle_entity_any_of", RawText: "宝马或Model Y",
+		Operator: "in", Relation: "any_of", Importance: "hard", Status: "active",
+		Alternatives: []RequirementAlternative{
+			{Facet: "brand", CanonicalValue: "宝马", EntityID: "brand:bmw", EntityResolution: "resolved"},
+			{Facet: "vehicle_model", CanonicalValue: "Model Y", EntityID: "model:tesla:model-y", EntityBrandID: "brand:tesla", EntityResolution: "resolved"},
+		},
+	}}, baselineMenu())
+	if len(plan.FilterCodes()) != 0 || len(plan.LocalVerifiers) != 1 ||
+		len(plan.LocalVerifiers[0].Alternatives) != 2 ||
+		plan.Resolutions[0].Capability != CapabilityVerifiable {
+		t.Fatalf("unexpected any_of plan: %#v", plan)
+	}
+	filtered, _ := ApplyLocalVerifiers([]guide.VehRate{
+		{Vehicle: &guide.Vehicle{BrandName: "宝马", VehicleName: "宝马325Li"}},
+		{Vehicle: &guide.Vehicle{BrandName: "特斯拉", VehicleName: "特斯拉Model Y"}},
+		{Vehicle: &guide.Vehicle{BrandName: "丰田", VehicleName: "丰田凯美瑞"}},
+	}, plan.LocalVerifiers)
+	if len(filtered) != 2 {
+		t.Fatalf("OR verifier did not preserve both alternatives: %#v", filtered)
 	}
 }
 
@@ -156,7 +268,11 @@ func TestCompilerExpandsSeriesToSameGroupModelFilters(t *testing.T) {
 		{ID: "model:test:s1:a", Type: vehiclecatalog.EntityModel, CanonicalName: "A款", ParentID: "series:test:s1", BrandID: "brand:test", ProviderBindings: []vehiclecatalog.ProviderBinding{{Provider: "guide", ProviderName: "测试品牌A款"}}},
 		{ID: "model:test:s1:b", Type: vehiclecatalog.EntityModel, CanonicalName: "B款", ParentID: "series:test:s1", BrandID: "brand:test", ProviderBindings: []vehiclecatalog.ProviderBinding{{Provider: "guide", ProviderName: "测试品牌B款"}}},
 	})
-	plan := NewCompilerWithVehicleCatalog(catalog).Compile([]Requirement{{
+	compiler, err := NewCompilerWithVehicleCatalog(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := compiler.Compile([]Requirement{{
 		ID: "series", Facet: "vehicle_series", RawText: "S1", CanonicalValue: "S1",
 		Operator: "eq", Importance: "hard", Status: "active",
 		EntityID: "series:test:s1", EntityBrandID: "brand:test",

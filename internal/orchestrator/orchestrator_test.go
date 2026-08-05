@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zxq97/agent/api/llm"
+	"github.com/zxq97/agent/api/maps"
+	"github.com/zxq97/agent/internal/domain"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
 	"github.com/zxq97/agent/internal/domain/rentalrules"
@@ -19,18 +22,111 @@ type staticID string
 
 func (id staticID) NewID() string { return string(id) }
 
+func newCommandRentalHandler(t *testing.T, now time.Time) rentalcontext.Handler {
+	t.Helper()
+	llmClient, err := llm.NewHTTPClient(&llm.HTTPConfig{
+		Endpoint: "http://unused.invalid",
+		APIKey:   "test-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extractor, err := rentalcontext.NewExtractor(llmClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := rentalcontext.NewHandler(
+		extractor,
+		maps.NewHTTPClient(&maps.HTTPConfig{Endpoint: "http://unused.invalid"}),
+		staticID("next"),
+		func() time.Time { return now },
+		time.UTC,
+		rentalcontext.DefaultAmbiguityConfig(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
 type successfulSearch struct {
 	calls int
 }
 
 type requirementDeltaHandler struct{}
 
-func (requirementDeltaHandler) Handle(context.Context, *session.AgentSession, *vehiclerequirement.UpdateInput) (*vehiclerequirement.UpdateResult, error) {
+type silentGeneralReply struct{}
+
+func (silentGeneralReply) Handle(context.Context, *session.AgentSession, *generalreply.Input) (*generalreply.Result, error) {
+	return &generalreply.Result{}, nil
+}
+
+func newTestRentalRulesHandler() rentalrules.Handler {
+	handler, err := rentalrules.NewHandler(rentalrules.NewDefaultCatalog())
+	if err != nil {
+		panic(err)
+	}
+	return handler
+}
+
+func newTestOrchestrator(
+	rental rentalcontext.Handler,
+	requirement vehiclerequirement.Handler,
+	search searchcar.Handler,
+	policy SearchPolicy,
+	now func() time.Time,
+	general ...generalreply.Handler,
+) *Orchestrator {
+	if rental == nil {
+		rental = domainMismatchRental{}
+	}
+	if requirement == nil {
+		requirement = domainMismatchRequirement{}
+	}
+	if search == nil {
+		search = &successfulSearch{}
+	}
+	var generalHandler generalreply.Handler = silentGeneralReply{}
+	if len(general) > 0 && general[0] != nil {
+		generalHandler = general[0]
+	}
+	value, err := NewWithExtensions(
+		rental,
+		requirement,
+		search,
+		policy,
+		now,
+		generalHandler,
+		vehiclecompare.NewHandler(),
+		newTestRentalRulesHandler(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func TestNewWithExtensionsRequiresCompleteDependencies(t *testing.T) {
+	if _, err := NewWithExtensions(
+		nil,
+		domainMismatchRequirement{},
+		&successfulSearch{},
+		searchpolicy.New(1, time.Now),
+		time.Now,
+		silentGeneralReply{},
+		vehiclecompare.NewHandler(),
+		newTestRentalRulesHandler(),
+	); err == nil {
+		t.Fatal("expected missing dependency error")
+	}
+}
+
+func (requirementDeltaHandler) Handle(context.Context, *session.AgentSession, *vehiclerequirement.Input) (*vehiclerequirement.Result, error) {
 	requirements := []session.SearchRequirementStateItem{{
 		ID: "seat", Facet: "seat_num", CanonicalValue: "7",
 		Operator: "eq", Importance: "hard", Status: "active",
 	}}
-	return &vehiclerequirement.UpdateResult{
+	return &vehiclerequirement.Result{
 		Changed: true, Requirements: requirements,
 		Deltas: []session.StateDelta{&session.RequirementDelta{
 			Requirements: requirements, IncrementVersion: true, ActivateGoal: true,
@@ -38,28 +134,25 @@ func (requirementDeltaHandler) Handle(context.Context, *session.AgentSession, *v
 	}, nil
 }
 
-func (h *successfulSearch) Handle(context.Context, *session.AgentSession, *searchcar.SearchCarInput) (*searchcar.SearchCarResult, error) {
+func (h *successfulSearch) Handle(context.Context, *session.AgentSession, *searchcar.Input) (*searchcar.Result, error) {
 	h.calls++
-	return &searchcar.SearchCarResult{Status: searchcar.ResultNeedsContext}, nil
+	return &searchcar.Result{Status: searchcar.ResultNeedsContext}, nil
 }
 
 func TestExecuteResolvesPendingAndAppliesOtherCondition(t *testing.T) {
 	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
 	pickup := now.Add(48 * time.Hour)
-	handler, err := rentalcontext.NewModifyRentalContextHandler(nil, nil, staticID("next"), func() time.Time { return now }, time.UTC, rentalcontext.DefaultAmbiguityConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newCommandRentalHandler(t, now)
 	agentSession := &session.AgentSession{Pending: session.PendingStore{Active: &session.PendingInteraction{
 		ID: "choose-location", Type: session.PendingSelectLocation, Status: session.PendingActive,
 		Options:         []session.PendingOption{{ID: "airport", Label: "虹桥机场", Location: &session.LocationRef{ID: "airport", Name: "虹桥机场", CityID: "310000", Latitude: 31.2, Longitude: 121.3}}},
 		BlockingActions: []session.PendingAction{session.ActionExecuteVehicleSearch}, CreatedAt: now, ExpireAt: now.Add(10 * time.Minute), MaxMissedUserTurns: 2,
 	}, DeferredActions: []session.DeferredAction{{ID: "budget", Action: session.ActionExecuteVehicleSearch, EvidenceText: "预算300", BlockedByPendingID: "choose-location"}}}}
 	search := &successfulSearch{}
-	orchestrator := New(handler, nil, search, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now })
+	orchestrator := newTestOrchestrator(handler, nil, search, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now })
 	result, err := orchestrator.Execute(context.Background(), agentSession, &TurnRequest{
 		SourceText: "虹桥机场，改成后天下午",
-		RentalContext: &rentalcontext.ModifyRentalContextInput{Command: &rentalcontext.ModifyRentalContextCommand{
+		RentalContext: &rentalcontext.Input{Command: &rentalcontext.Command{
 			PickupTime: &pickup,
 		}},
 	})
@@ -77,10 +170,7 @@ func TestExecuteResolvesPendingAndAppliesOtherCondition(t *testing.T) {
 
 func TestExecuteKeepsRequirementAlongsidePendingAnswer(t *testing.T) {
 	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
-	handler, err := rentalcontext.NewModifyRentalContextHandler(nil, nil, staticID("next"), func() time.Time { return now }, time.UTC, rentalcontext.DefaultAmbiguityConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	handler := newCommandRentalHandler(t, now)
 	agentSession := &session.AgentSession{Pending: session.PendingStore{Active: &session.PendingInteraction{
 		ID: "choose-location", Type: session.PendingSelectLocation, Status: session.PendingActive,
 		Options: []session.PendingOption{{
@@ -91,12 +181,12 @@ func TestExecuteKeepsRequirementAlongsidePendingAnswer(t *testing.T) {
 		CreatedAt:       now, ExpireAt: now.Add(10 * time.Minute),
 	}}}
 	search := &successfulSearch{}
-	result, err := New(
+	result, err := newTestOrchestrator(
 		handler, requirementDeltaHandler{}, search,
 		searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now },
 	).Execute(context.Background(), agentSession, &TurnRequest{
 		SourceText:         "虹桥机场，还要7座",
-		VehicleRequirement: &vehiclerequirement.UpdateInput{SourceText: "还要7座"},
+		VehicleRequirement: &vehiclerequirement.Input{SourceText: "还要7座"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +203,7 @@ func TestExecuteKeepsRequirementAlongsidePendingAnswer(t *testing.T) {
 func TestExecuteSuspendsIgnoredPendingAfterTwoTurns(t *testing.T) {
 	now := time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC)
 	agentSession := &session.AgentSession{Pending: session.PendingStore{Active: &session.PendingInteraction{ID: "location", Type: session.PendingSelectLocation, Status: session.PendingActive, CreatedAt: now, ExpireAt: now.Add(time.Hour), MaxMissedUserTurns: 2}}}
-	orchestrator := New(nil, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now })
+	orchestrator := newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now })
 	if _, err := orchestrator.Execute(context.Background(), agentSession, &TurnRequest{SourceText: "我想要SUV"}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +223,7 @@ func TestExecuteReturnsDeferredActionsWhenPendingExpires(t *testing.T) {
 		DeferredActions: []session.DeferredAction{{ID: "budget", Action: session.ActionExecuteVehicleSearch, BlockedByPendingID: "location"}},
 	}}
 	search := &successfulSearch{}
-	result, err := New(nil, nil, search, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }).Execute(context.Background(), agentSession, &TurnRequest{SourceText: "继续"})
+	result, err := newTestOrchestrator(nil, nil, search, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }).Execute(context.Background(), agentSession, &TurnRequest{SourceText: "继续"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,14 +235,14 @@ func TestExecuteReturnsDeferredActionsWhenPendingExpires(t *testing.T) {
 
 type domainMismatchRental struct{}
 
-func (domainMismatchRental) Handle(context.Context, *session.AgentSession, *rentalcontext.ModifyRentalContextInput) (*rentalcontext.ModifyRentalContextResult, error) {
-	return nil, rentalcontext.ErrDomainMismatch
+func (domainMismatchRental) Handle(context.Context, *session.AgentSession, *rentalcontext.Input) (*rentalcontext.Result, error) {
+	return nil, domain.ErrDomainMismatch
 }
 
 type domainMismatchRequirement struct{}
 
-func (domainMismatchRequirement) Handle(context.Context, *session.AgentSession, *vehiclerequirement.UpdateInput) (*vehiclerequirement.UpdateResult, error) {
-	return nil, vehiclerequirement.ErrDomainMismatch
+func (domainMismatchRequirement) Handle(context.Context, *session.AgentSession, *vehiclerequirement.Input) (*vehiclerequirement.Result, error) {
+	return nil, domain.ErrDomainMismatch
 }
 
 type recordingGeneralReply struct {
@@ -165,10 +255,10 @@ func (h *recordingGeneralReply) Handle(_ context.Context, _ *session.AgentSessio
 }
 
 func TestExecuteTreatsDomainMismatchAsNonFatal(t *testing.T) {
-	result, err := New(domainMismatchRental{}, domainMismatchRequirement{}, nil, searchpolicy.New(1, time.Now), time.Now).Execute(context.Background(), &session.AgentSession{}, &TurnRequest{
+	result, err := newTestOrchestrator(domainMismatchRental{}, domainMismatchRequirement{}, nil, searchpolicy.New(1, time.Now), time.Now).Execute(context.Background(), &session.AgentSession{}, &TurnRequest{
 		SourceText:         "闲聊",
-		RentalContext:      &rentalcontext.ModifyRentalContextInput{SourceText: "闲聊"},
-		VehicleRequirement: &vehiclerequirement.UpdateInput{SourceText: "闲聊"},
+		RentalContext:      &rentalcontext.Input{SourceText: "闲聊"},
+		VehicleRequirement: &vehiclerequirement.Input{SourceText: "闲聊"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +270,7 @@ func TestExecuteTreatsDomainMismatchAsNonFatal(t *testing.T) {
 
 func TestExecuteSendsDomainMismatchTextToGeneralReply(t *testing.T) {
 	general := &recordingGeneralReply{}
-	result, err := New(
+	result, err := newTestOrchestrator(
 		domainMismatchRental{},
 		domainMismatchRequirement{},
 		nil,
@@ -189,8 +279,8 @@ func TestExecuteSendsDomainMismatchTextToGeneralReply(t *testing.T) {
 		general,
 	).Execute(context.Background(), &session.AgentSession{}, &TurnRequest{
 		SourceText:         "SUV和MPV有什么区别",
-		RentalContext:      &rentalcontext.ModifyRentalContextInput{SourceText: "SUV和MPV有什么区别"},
-		VehicleRequirement: &vehiclerequirement.UpdateInput{SourceText: "SUV和MPV有什么区别"},
+		RentalContext:      &rentalcontext.Input{SourceText: "SUV和MPV有什么区别"},
+		VehicleRequirement: &vehiclerequirement.Input{SourceText: "SUV和MPV有什么区别"},
 		GeneralReply:       &generalreply.Input{},
 	})
 	if err != nil {
@@ -222,10 +312,20 @@ func (h *recordingRules) Handle(_ context.Context, input *rentalrules.Input) (*r
 func TestExecuteRunsComparisonAndRulesHandlers(t *testing.T) {
 	comparison := &recordingComparison{}
 	rules := &recordingRules{}
-	result, err := NewWithExtensions(
-		nil, nil, nil, searchpolicy.New(1, time.Now), time.Now,
-		nil, comparison, rules,
-	).Execute(context.Background(), &session.AgentSession{}, &TurnRequest{
+	value, err := NewWithExtensions(
+		domainMismatchRental{},
+		domainMismatchRequirement{},
+		&successfulSearch{},
+		searchpolicy.New(1, time.Now),
+		time.Now,
+		&recordingGeneralReply{},
+		comparison,
+		rules,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := value.Execute(context.Background(), &session.AgentSession{}, &TurnRequest{
 		SourceText:        "对比1和2，再看押金",
 		VehicleComparison: &vehiclecompare.Input{EvidenceText: "对比1和2"},
 		RentalRules:       &rentalrules.Input{EvidenceText: "押金"},

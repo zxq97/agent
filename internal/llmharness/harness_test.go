@@ -65,6 +65,22 @@ func TestHarnessRunsFullContractAndAggregatesUsage(t *testing.T) {
 	}
 }
 
+func TestExtractorReturnsValidatedHarnessValue(t *testing.T) {
+	client := &scriptedClient{responses: []*llm.ChatResponse{{Content: "42"}}}
+	extractor, err := NewExtractor(client, integerTask(), testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := 42
+	value, err := extractor.Extract(context.Background(), &input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value == nil || *value != 42 {
+		t.Fatalf("value=%v", value)
+	}
+}
+
 func TestHarnessUsesFallbackForSecondAttempt(t *testing.T) {
 	client := &scriptedClient{responses: []*llm.ChatResponse{
 		{Content: "bad"},

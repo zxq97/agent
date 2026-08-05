@@ -9,7 +9,7 @@ import (
 )
 
 func TestDecodeExtractResult(t *testing.T) {
-	content := `{"requirements":[{"raw_text":"特斯拉 Model Y","semantic_label":"","category":"vehicle","canonical_type":"vehicle_model","value":{"kind":"text","text":"Model Y","unit":""},"operation":"replace","operator":"eq","importance":"hard","confidence":0.99,"entity_context":{"brand_hint":"特斯拉","series_hint":""}},{"raw_text":"最好7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"number","number":7,"unit":"seat"},"operation":"replace","operator":"eq","importance":"soft","confidence":0.95,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
+	content := `{"requirements":[{"raw_text":"特斯拉 Model Y","semantic_label":"","category":"vehicle","canonical_type":"vehicle_model","value":{"kind":"text","text":"Model Y","unit":""},"operation":"replace","relation":"exact","importance":"hard","confidence":0.99,"entity_context":{"brand_hint":"特斯拉","series_hint":""}},{"raw_text":"最好7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"number","number":7,"unit":"seat"},"operation":"replace","relation":"exact","importance":"soft","confidence":0.95,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
 	result, err := decodeExtractResult(content)
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestDecodeExtractResult(t *testing.T) {
 }
 
 func TestDecodeExtractResultPreservesOpenSemanticRequirement(t *testing.T) {
-	content := `{"requirements":[{"raw_text":"适合带老人出行","semantic_label":"elderly_friendly","category":"usage_scenario","canonical_type":null,"value":null,"operation":"add","operator":"eq","importance":"soft","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
+	content := `{"requirements":[{"raw_text":"适合带老人出行","semantic_label":"elderly_friendly","category":"usage_scenario","canonical_type":null,"value":null,"operation":"add","relation":"exact","importance":"soft","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
 	result, err := decodeExtractResult(content)
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +37,19 @@ func TestDecodeExtractResultPreservesOpenSemanticRequirement(t *testing.T) {
 	}
 }
 
+func TestDecodeVehicleEntityAnyOf(t *testing.T) {
+	content := `{"requirements":[{"raw_text":"宝马或Model Y","semantic_label":"vehicle_entity_any_of","category":"vehicle","canonical_type":null,"value":null,"operation":"replace","relation":"any_of","alternatives":[{"canonical_type":"brand","value":{"kind":"text","text":"宝马","unit":""},"entity_context":{"brand_hint":"宝马","series_hint":""}},{"canonical_type":"vehicle_model","value":{"kind":"text","text":"Model Y","unit":""},"entity_context":{"brand_hint":"特斯拉","series_hint":""}}],"importance":"hard","confidence":0.99,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`
+	result, err := decodeExtractResult(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Requirements) != 1 || result.Requirements[0].Relation != RelationAnyOf ||
+		len(result.Requirements[0].Alternatives) != 2 ||
+		result.Requirements[0].Operator != OperatorIN {
+		t.Fatalf("unexpected any_of result: %#v", result)
+	}
+}
+
 func TestDecodeExtractResultRejectsSearchWithoutRequirements(t *testing.T) {
 	if _, err := decodeExtractResult(`{"requirements":[],"domain_matched":true}`); err == nil {
 		t.Fatal("expected domain_matched contract error")
@@ -44,7 +57,7 @@ func TestDecodeExtractResultRejectsSearchWithoutRequirements(t *testing.T) {
 }
 
 func TestDecodeExtractResultAllowsRemoveCanonicalType(t *testing.T) {
-	result, err := decodeExtractResult(`{"requirements":[{"raw_text":"品牌不限","semantic_label":"","category":"vehicle","canonical_type":"brand","value":null,"operation":"remove","operator":"eq","importance":"hard","confidence":1,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`)
+	result, err := decodeExtractResult(`{"requirements":[{"raw_text":"品牌不限","semantic_label":"","category":"vehicle","canonical_type":"brand","value":null,"operation":"remove","relation":"exact","importance":"hard","confidence":1,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +69,13 @@ func TestDecodeExtractResultAllowsRemoveCanonicalType(t *testing.T) {
 func TestDecodeExtractResultRejectsInvalidContract(t *testing.T) {
 	tests := []string{
 		`{"requirements":[]}`,
-		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"unknown_type","value":{"kind":"text","text":"特斯拉"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"raw_text":"适合老人","semantic_label":"","category":"usage_scenario","canonical_type":null,"value":null,"operation":"add","operator":"eq","importance":"soft","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"raw_text":"7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"number","text":"7"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"raw_text":"7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"text","text":"7"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"price","canonical_type":"brand","value":{"kind":"text","text":"特斯拉"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"brand","value":{"kind":"entity","text":"brand:tesla"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
-		`{"requirements":[{"id":"llm-id","raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"brand","value":{"kind":"text","text":"特斯拉"},"operation":"add","operator":"eq","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"unknown_type","value":{"kind":"text","text":"特斯拉"},"operation":"add","relation":"exact","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"适合老人","semantic_label":"","category":"usage_scenario","canonical_type":null,"value":null,"operation":"add","relation":"exact","importance":"soft","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"number","text":"7"},"operation":"add","relation":"exact","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"7座","semantic_label":"","category":"configuration","canonical_type":"seat_num","value":{"kind":"text","text":"7"},"operation":"add","relation":"exact","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"price","canonical_type":"brand","value":{"kind":"text","text":"特斯拉"},"operation":"add","relation":"exact","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"brand","value":{"kind":"entity","text":"brand:tesla"},"operation":"add","relation":"exact","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
+		`{"requirements":[{"id":"llm-id","raw_text":"特斯拉","semantic_label":"","category":"vehicle","canonical_type":"brand","value":{"kind":"text","text":"特斯拉"},"operation":"add","relation":"exact","importance":"hard","confidence":0.9,"entity_context":{"brand_hint":"","series_hint":""}}],"domain_matched":true}`,
 	}
 	for _, content := range tests {
 		if _, err := decodeExtractResult(content); err == nil {
@@ -79,9 +92,8 @@ func TestExtractionInputContainsOpenRequirementContext(t *testing.T) {
 			SemanticLabel: "elderly_friendly",
 			Category:      requirement.CategoryUsageScenario,
 			Value:         requirement.Value{Kind: requirement.ValueNone},
-			Operator:      "eq",
+			Relation:      "exact",
 			Importance:    "soft",
-			Status:        "unresolved",
 		}},
 		RecentDomainHistory: []string{"想看丰田"},
 	}
@@ -90,12 +102,12 @@ func TestExtractionInputContainsOpenRequirementContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	value := string(data)
-	for _, key := range []string{`"source_text"`, `"current_requirements"`, `"recent_domain_history"`, `"raw_text"`, `"semantic_label"`, `"category"`, `"canonical_type"`, `"value"`, `"operator"`, `"importance"`, `"status"`} {
+	for _, key := range []string{`"source_text"`, `"current_requirements"`, `"recent_domain_history"`, `"raw_text"`, `"semantic_label"`, `"category"`, `"canonical_type"`, `"value"`, `"relation"`, `"importance"`} {
 		if !strings.Contains(value, key) {
 			t.Fatalf("missing key %s in %s", key, value)
 		}
 	}
-	for _, forbidden := range []string{`"location_name"`, `"pickup_time"`, `"return_time"`, `"filter_code"`, `"context_id"`} {
+	for _, forbidden := range []string{`"location_name"`, `"pickup_time"`, `"return_time"`, `"filter_code"`, `"context_id"`, `"status"`, `"entity_resolution"`, `"capability"`} {
 		if strings.Contains(value, forbidden) {
 			t.Fatalf("unexpected key %s in %s", forbidden, value)
 		}
@@ -114,5 +126,21 @@ func TestValidateRequirementExtractionOutputRejectsHistoryEcho(t *testing.T) {
 	}
 	if err := validateRequirementExtractionOutput(input, result); err == nil {
 		t.Fatal("expected raw-text evidence error")
+	}
+}
+
+func TestOutputValidatorRejectsPassengerCountAsSeatRequirement(t *testing.T) {
+	number := 2.0
+	err := validateRequirementExtractionOutput(&ExtractionInput{SourceText: "两个人出行"}, &ExtractResult{
+		DomainMatched: true,
+		Requirements: []Requirement{{
+			RawText: "两个人", CanonicalType: FacetSeatNum,
+			Value:     requirement.Value{Kind: requirement.ValueNumber, Number: &number, Unit: "seat"},
+			Operation: OperationAdd, Relation: RelationExact, Operator: OperatorEQ,
+			Importance: ImportanceHard,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "passenger count") {
+		t.Fatalf("expected passenger inference rejection, got %v", err)
 	}
 }

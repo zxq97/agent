@@ -14,7 +14,7 @@ type ExtractedTime struct {
 	Value  *string          `json:"value"`
 }
 
-type RentalContextExtractResult struct {
+type ExtractResult struct {
 	LocationQuery string        `json:"location_query"`
 	PickupTime    ExtractedTime `json:"pickup_time"`
 	ReturnTime    ExtractedTime `json:"return_time"`

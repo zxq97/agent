@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/zxq97/agent/internal/domain"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
 	"github.com/zxq97/agent/internal/domain/rentalrules"
@@ -18,30 +19,6 @@ import (
 	"github.com/zxq97/agent/internal/session"
 	"github.com/zxq97/agent/internal/turnnormalizer"
 )
-
-type RentalContextHandler interface {
-	Handle(context.Context, *session.AgentSession, *rentalcontext.ModifyRentalContextInput) (*rentalcontext.ModifyRentalContextResult, error)
-}
-
-type VehicleRequirementHandler interface {
-	Handle(context.Context, *session.AgentSession, *vehiclerequirement.UpdateInput) (*vehiclerequirement.UpdateResult, error)
-}
-
-type SearchCarHandler interface {
-	Handle(context.Context, *session.AgentSession, *searchcar.SearchCarInput) (*searchcar.SearchCarResult, error)
-}
-
-type GeneralReplyHandler interface {
-	Handle(context.Context, *session.AgentSession, *generalreply.Input) (*generalreply.Result, error)
-}
-
-type VehicleComparisonHandler interface {
-	Handle(context.Context, *session.AgentSession, *vehiclecompare.Input) (*vehiclecompare.Result, error)
-}
-
-type RentalRulesHandler interface {
-	Handle(context.Context, *rentalrules.Input) (*rentalrules.Result, error)
-}
 
 type SearchPolicy interface {
 	Evaluate(*session.AgentSession, searchpolicy.Input) searchpolicy.Result
@@ -65,18 +42,18 @@ type TurnRequest struct {
 	ReceivedAt time.Time
 	Plan       planner.ActionPlan
 
-	RentalContext      *rentalcontext.ModifyRentalContextInput
-	VehicleRequirement *vehiclerequirement.UpdateInput
-	SearchRequest      *searchcar.SearchCarInput
+	RentalContext      *rentalcontext.Input
+	VehicleRequirement *vehiclerequirement.Input
+	SearchRequest      *searchcar.Input
 	VehicleComparison  *vehiclecompare.Input
 	RentalRules        *rentalrules.Input
 	GeneralReply       *generalreply.Input
 }
 
 type TurnResult struct {
-	RentalContext      []*rentalcontext.ModifyRentalContextResult
-	VehicleRequirement *vehiclerequirement.UpdateResult
-	SearchCar          *searchcar.SearchCarResult
+	RentalContext      []*rentalcontext.Result
+	VehicleRequirement *vehiclerequirement.Result
+	SearchCar          *searchcar.Result
 	VehicleComparison  *vehiclecompare.Result
 	RentalRules        *rentalrules.Result
 	GeneralReply       *generalreply.Result
@@ -97,52 +74,32 @@ type FailedAction struct {
 // Orchestrator executes the Router-selected domains serially, then asks the
 // deterministic SearchPolicy whether Guide search should run.
 type Orchestrator struct {
-	rental      RentalContextHandler
-	requirement VehicleRequirementHandler
-	search      SearchCarHandler
+	rental      rentalcontext.Handler
+	requirement vehiclerequirement.Handler
+	search      searchcar.Handler
 	policy      SearchPolicy
 	reducer     *session.Reducer
 	pending     *pendingresolver.Resolver
 	planner     *planner.Planner
 	now         func() time.Time
-	general     GeneralReplyHandler
-	comparison  VehicleComparisonHandler
-	rules       RentalRulesHandler
+	general     generalreply.Handler
+	comparison  vehiclecompare.Handler
+	rules       rentalrules.Handler
 }
 
 func NewWithExtensions(
-	rental RentalContextHandler,
-	requirement VehicleRequirementHandler,
-	search SearchCarHandler,
+	rental rentalcontext.Handler,
+	requirement vehiclerequirement.Handler,
+	search searchcar.Handler,
 	policy SearchPolicy,
 	now func() time.Time,
-	general GeneralReplyHandler,
-	comparison VehicleComparisonHandler,
-	rules RentalRulesHandler,
-) *Orchestrator {
-	value := New(rental, requirement, search, policy, now, general)
-	value.comparison = comparison
-	value.rules = rules
-	return value
-}
-
-func New(
-	rental RentalContextHandler,
-	requirement VehicleRequirementHandler,
-	search SearchCarHandler,
-	policy SearchPolicy,
-	now func() time.Time,
-	general ...GeneralReplyHandler,
-) *Orchestrator {
-	if now == nil {
-		now = time.Now
-	}
-	if policy == nil {
-		policy = searchpolicy.New(1, now)
-	}
-	var generalHandler GeneralReplyHandler
-	if len(general) > 0 {
-		generalHandler = general[0]
+	general generalreply.Handler,
+	comparison vehiclecompare.Handler,
+	rules rentalrules.Handler,
+) (*Orchestrator, error) {
+	if rental == nil || requirement == nil || search == nil || policy == nil ||
+		now == nil || general == nil || comparison == nil || rules == nil {
+		return nil, errors.New("orchestrator: all handlers, policy and clock are required")
 	}
 	return &Orchestrator{
 		rental:      rental,
@@ -153,8 +110,10 @@ func New(
 		pending:     pendingresolver.New(),
 		planner:     planner.New(),
 		now:         now,
-		general:     generalHandler,
-	}
+		general:     general,
+		comparison:  comparison,
+		rules:       rules,
+	}, nil
 }
 
 func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentSession, request *TurnRequest) (*TurnResult, error) {
@@ -214,11 +173,8 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 			addressed = true
 		} else if active.Type == session.PendingSelectLocation {
 			if option := resolution.SelectedOption; option != nil {
-				if o.rental == nil {
-					return nil, errors.New("orchestrator execute: rental context handler is required to resolve location pending")
-				}
-				rentalResult, err := o.rental.Handle(ctx, agentSession, &rentalcontext.ModifyRentalContextInput{
-					Command:    &rentalcontext.ModifyRentalContextCommand{LocationID: option.ID, InteractionID: active.ID},
+				rentalResult, err := o.rental.Handle(ctx, agentSession, &rentalcontext.Input{
+					Command:    &rentalcontext.Command{LocationID: option.ID, InteractionID: active.ID},
 					ReceivedAt: now,
 				})
 				if err != nil {
@@ -256,9 +212,6 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	}
 
 	if request.RentalContext != nil {
-		if o.rental == nil {
-			return nil, errors.New("orchestrator execute: rental context handler is required")
-		}
 		input := *request.RentalContext
 		if input.SourceText == "" || addressed {
 			input.SourceText = residual
@@ -266,7 +219,7 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		input.ReceivedAt = now
 		if input.Command != nil || hasMeaningfulText(input.SourceText) {
 			rentalResult, err := o.rental.Handle(ctx, agentSession, &input)
-			if err != nil && !errors.Is(err, rentalcontext.ErrDomainMismatch) {
+			if err != nil && !errors.Is(err, domain.ErrDomainMismatch) {
 				return nil, err
 			}
 			if err == nil {
@@ -307,15 +260,12 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	// Requirement extraction is deliberately allowed to run even when a
 	// location/time Pending blocks Guide search, so mixed input is not lost.
 	if request.VehicleRequirement != nil {
-		if o.requirement == nil {
-			return nil, errors.New("orchestrator execute: vehicle requirement handler is required")
-		}
 		input := *request.VehicleRequirement
 		if input.SourceText == "" {
 			input.SourceText = request.SourceText
 		}
 		requirementResult, err := o.requirement.Handle(ctx, agentSession, &input)
-		if err != nil && !errors.Is(err, vehiclerequirement.ErrDomainMismatch) {
+		if err != nil && !errors.Is(err, domain.ErrDomainMismatch) {
 			if !rentalChanged && !addressed {
 				return nil, err
 			}
@@ -361,10 +311,7 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	case searchpolicy.DecisionAskPreference:
 		result.SearchCar = searchcar.NeedsRequirementResult(decision.Message)
 	case searchpolicy.DecisionSearch:
-		if o.search == nil {
-			return nil, errors.New("orchestrator execute: search car handler is required")
-		}
-		searchInput := &searchcar.SearchCarInput{Operation: decision.Operation, ReceivedAt: now}
+		searchInput := &searchcar.Input{Operation: decision.Operation, ReceivedAt: now}
 		if request.SearchRequest != nil {
 			searchInput.EvidenceText = request.SearchRequest.EvidenceText
 			searchInput.NoPreferenceExplicit = request.SearchRequest.NoPreferenceExplicit
@@ -372,12 +319,15 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 		}
 		searchResult, err := o.search.Handle(ctx, agentSession, searchInput)
 		if err != nil {
-			if err := o.reducer.Apply(agentSession, &session.SearchDirtyDelta{Reason: "guide_error"}); err != nil {
+			reasonCode := "search_external_failure"
+			if isSearchContextError(err) {
+				reasonCode = "search_invalid_context"
+			} else if err := o.reducer.Apply(agentSession, &session.SearchDirtyDelta{Reason: "guide_error"}); err != nil {
 				return nil, err
 			}
 			result.FailedActions = append(result.FailedActions, FailedAction{
 				Action:     string(session.ActionExecuteVehicleSearch),
-				ReasonCode: "search_external_failure",
+				ReasonCode: reasonCode,
 				Cause:      err,
 			})
 			break
@@ -391,9 +341,6 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	}
 
 	if request.VehicleComparison != nil {
-		if o.comparison == nil {
-			return nil, errors.New("orchestrator execute: vehicle comparison handler is required")
-		}
 		comparisonResult, err := o.comparison.Handle(ctx, agentSession, request.VehicleComparison)
 		if err != nil {
 			return nil, err
@@ -402,9 +349,6 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	}
 
 	if request.RentalRules != nil {
-		if o.rules == nil {
-			return nil, errors.New("orchestrator execute: rental rules handler is required")
-		}
 		ruleResult, err := o.rules.Handle(ctx, request.RentalRules)
 		if err != nil {
 			return nil, err
@@ -416,7 +360,7 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	if generalInput != nil {
 		fallbackTexts = appendUniqueText(fallbackTexts, generalInput.SourceText)
 	}
-	if len(fallbackTexts) > 0 && o.general != nil {
+	if len(fallbackTexts) > 0 {
 		input := &generalreply.Input{SourceText: strings.Join(fallbackTexts, "\n")}
 		if generalInput != nil {
 			input.RecentMessages = append([]generalreply.Message(nil), generalInput.RecentMessages...)
@@ -460,6 +404,12 @@ func (o *Orchestrator) Execute(ctx context.Context, agentSession *session.AgentS
 	}
 	result.ActivePending = agentSession.Pending.Active
 	return result, nil
+}
+
+func isSearchContextError(err error) bool {
+	return errors.Is(err, searchcar.ErrReturnNotAfterPickup) ||
+		errors.Is(err, searchcar.ErrPickupNotFuture) ||
+		errors.Is(err, searchcar.ErrInvalidCityID)
 }
 
 func appendUniqueText(values []string, value string) []string {
@@ -507,7 +457,7 @@ func applyActionPlan(request *TurnRequest) {
 	}
 	if action := request.Plan.Action(planner.ActionModifyRentalContext); action != nil {
 		if request.RentalContext == nil {
-			request.RentalContext = &rentalcontext.ModifyRentalContextInput{}
+			request.RentalContext = &rentalcontext.Input{}
 		}
 		input := *request.RentalContext
 		input.SourceText = appendEvidence(input.SourceText, action.EvidenceText)
@@ -515,7 +465,7 @@ func applyActionPlan(request *TurnRequest) {
 	}
 	if action := request.Plan.Action(planner.ActionUpdateVehicleRequirements); action != nil {
 		if request.VehicleRequirement == nil {
-			request.VehicleRequirement = &vehiclerequirement.UpdateInput{}
+			request.VehicleRequirement = &vehiclerequirement.Input{}
 		}
 		input := *request.VehicleRequirement
 		input.SourceText = appendEvidence(input.SourceText, action.EvidenceText)
@@ -523,7 +473,7 @@ func applyActionPlan(request *TurnRequest) {
 	}
 	if action := request.Plan.Action(planner.ActionExecuteVehicleSearch); action != nil {
 		if request.SearchRequest == nil {
-			request.SearchRequest = &searchcar.SearchCarInput{}
+			request.SearchRequest = &searchcar.Input{}
 		}
 		input := *request.SearchRequest
 		input.EvidenceText = appendEvidence(input.EvidenceText, action.EvidenceText)

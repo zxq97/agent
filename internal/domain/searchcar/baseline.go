@@ -26,7 +26,7 @@ func newGuideBaselineProvider(executor searchExecutor) *guideBaselineProvider {
 	return &guideBaselineProvider{executor: executor}
 }
 
-func (h *SearchCarHandler) ensureBaseline(ctx context.Context, agentSession *session.AgentSession, pageSize int, now time.Time) (*session.GuideBaselineCache, error) {
+func (h *handler) ensureBaseline(ctx context.Context, agentSession *session.AgentSession, pageSize int, now time.Time) (*session.GuideBaselineCache, error) {
 	return h.baseline.GetOrFetch(ctx, agentSession, pageSize, now)
 }
 
@@ -63,7 +63,7 @@ func (p *guideBaselineProvider) GetOrFetch(ctx context.Context, agentSession *se
 
 var _ baselineProvider = (*guideBaselineProvider)(nil)
 
-func (h *SearchCarHandler) validContinuationPlan(ctx context.Context, agentSession *session.AgentSession, now time.Time) (searchplan.SearchExecutionPlan, bool) {
+func (h *handler) validContinuationPlan(ctx context.Context, agentSession *session.AgentSession, now time.Time) (searchplan.SearchExecutionPlan, bool) {
 	snapshot := agentSession.Search.ActiveSearch
 	if snapshot == nil || (snapshot.Status != session.SearchSnapshotActive && snapshot.Status != session.SearchSnapshotExhausted) {
 		return searchplan.SearchExecutionPlan{}, false
@@ -88,7 +88,7 @@ func (h *SearchCarHandler) validContinuationPlan(ctx context.Context, agentSessi
 	return executionPlan, true
 }
 
-func (h *SearchCarHandler) snapshotMatchesCurrentState(agentSession *session.AgentSession) bool {
+func (h *handler) snapshotMatchesCurrentState(agentSession *session.AgentSession) bool {
 	snapshot := agentSession.Search.ActiveSearch
 	if snapshot == nil {
 		return false
@@ -109,7 +109,7 @@ func rentalFingerprint(state session.SearchState) string {
 	return state.Location.ID + "|" + state.PickupTime.Format(time.RFC3339Nano) + "|" + state.ReturnTime.Format(time.RFC3339Nano)
 }
 
-func (h *SearchCarHandler) runtimeCapabilityContext(state session.SearchState, baseline *session.GuideBaselineCache) capability.RuntimeContext {
+func (h *handler) runtimeCapabilityContext(state session.SearchState, baseline *session.GuideBaselineCache) capability.RuntimeContext {
 	return capability.RuntimeContext{
 		MenuFingerprint:   menuFingerprint(baseline.Menu),
 		MenuCodes:         menuCodes(baseline.Menu),

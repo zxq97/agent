@@ -13,7 +13,7 @@ import (
 
 const requirementTestConfigPath = "../../../conf/dev.yaml"
 
-func TestLLMExtractorWithRemoteService(t *testing.T) {
+func TestExtractorWithRemoteService(t *testing.T) {
 	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
 		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real LLM integration tests")
 	}
@@ -28,7 +28,7 @@ func TestLLMExtractorWithRemoteService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extractor, err := NewLLMExtractor(client)
+	extractor, err := NewExtractor(client)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,8 +1,7 @@
 package vehiclerequirement
 
 import (
-	"context"
-
+	"github.com/zxq97/agent/internal/llmharness"
 	"github.com/zxq97/agent/internal/requirement"
 	"github.com/zxq97/agent/internal/session"
 )
@@ -31,6 +30,19 @@ const (
 	OperationRemove  Operation = "remove"
 )
 
+// ConstraintRelation describes the user's business meaning. It is deliberately
+// independent from Guide filter operators and other execution details.
+type ConstraintRelation string
+
+const (
+	RelationExact   ConstraintRelation = "exact"
+	RelationAtLeast ConstraintRelation = "at_least"
+	RelationAtMost  ConstraintRelation = "at_most"
+	RelationRange   ConstraintRelation = "range"
+	RelationExclude ConstraintRelation = "exclude"
+	RelationAnyOf   ConstraintRelation = "any_of"
+)
+
 type Operator string
 
 const (
@@ -57,22 +69,30 @@ type EntityContext struct {
 	SeriesHint string `json:"series_hint"`
 }
 
+type ConstraintAlternative struct {
+	CanonicalType Facet             `json:"canonical_type"`
+	Value         requirement.Value `json:"value"`
+	EntityContext EntityContext     `json:"entity_context"`
+}
+
 type Requirement struct {
-	RawText       string               `json:"raw_text"`
-	SemanticLabel string               `json:"semantic_label"`
-	Category      requirement.Category `json:"category"`
-	CanonicalType Facet                `json:"canonical_type,omitempty"`
-	Value         requirement.Value    `json:"value"`
-	Operation     Operation            `json:"operation"`
-	Operator      Operator             `json:"operator"`
-	Importance    Importance           `json:"importance"`
-	Confidence    float64              `json:"confidence"`
-	EntityContext EntityContext        `json:"entity_context"`
+	RawText       string                  `json:"raw_text"`
+	SemanticLabel string                  `json:"semantic_label"`
+	Category      requirement.Category    `json:"category"`
+	CanonicalType Facet                   `json:"canonical_type,omitempty"`
+	Value         requirement.Value       `json:"value"`
+	Operation     Operation               `json:"operation"`
+	Relation      ConstraintRelation      `json:"relation"`
+	Alternatives  []ConstraintAlternative `json:"alternatives,omitempty"`
+	Importance    Importance              `json:"importance"`
+	Confidence    float64                 `json:"confidence"`
+	EntityContext EntityContext           `json:"entity_context"`
 
 	// Facet and RawValue are transitional internal mirrors used by the current
 	// normalizer/compiler while they migrate to CanonicalType and typed Value.
-	Facet    Facet  `json:"-"`
-	RawValue string `json:"-"`
+	Facet    Facet    `json:"-"`
+	RawValue string   `json:"-"`
+	Operator Operator `json:"-"`
 }
 
 type RequirementCategory = requirement.Category
@@ -99,14 +119,19 @@ type ExtractResult struct {
 }
 
 type RequirementView struct {
-	RawText       string               `json:"raw_text"`
-	SemanticLabel string               `json:"semantic_label"`
-	Category      requirement.Category `json:"category"`
-	CanonicalType string               `json:"canonical_type"`
-	Value         requirement.Value    `json:"value"`
-	Operator      string               `json:"operator"`
-	Importance    string               `json:"importance"`
-	Status        string               `json:"status"`
+	RawText       string                       `json:"raw_text"`
+	SemanticLabel string                       `json:"semantic_label"`
+	Category      requirement.Category         `json:"category"`
+	CanonicalType string                       `json:"canonical_type"`
+	Value         requirement.Value            `json:"value"`
+	Relation      string                       `json:"relation"`
+	Alternatives  []RequirementAlternativeView `json:"alternatives,omitempty"`
+	Importance    string                       `json:"importance"`
+}
+
+type RequirementAlternativeView struct {
+	CanonicalType string `json:"canonical_type"`
+	Value         string `json:"value"`
 }
 
 type ExtractionInput struct {
@@ -115,15 +140,13 @@ type ExtractionInput struct {
 	RecentDomainHistory []string          `json:"recent_domain_history"`
 }
 
-type Extractor interface {
-	Extract(context.Context, *ExtractionInput) (*ExtractResult, error)
-}
+type Extractor = llmharness.Extractor[ExtractionInput, ExtractResult]
 
-type UpdateInput struct {
+type Input struct {
 	SourceText string
 }
 
-type UpdateResult struct {
+type Result struct {
 	Changed      bool
 	Requirements []session.SearchRequirementStateItem
 	Deltas       []session.StateDelta

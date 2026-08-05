@@ -10,7 +10,7 @@ import (
 
 func TestHandlerComparesSelectedCurrentQuotes(t *testing.T) {
 	agentSession := comparisonSession()
-	result, err := New().Handle(context.Background(), agentSession, &Input{EvidenceText: "对比1和2"})
+	result, err := NewHandler().Handle(context.Background(), agentSession, &Input{EvidenceText: "对比1和2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestHandlerRequiresSelectionWhenManyQuotesExist(t *testing.T) {
 		agentSession.Search.ActiveSearch.Batches[0].Vehicles,
 		searchruntime.Quote{Vehicle: &searchruntime.Vehicle{Name: "车辆三", Code: "car-3"}, Reference: &searchruntime.Reference{ID: "ref-3"}},
 	)
-	result, err := New().Handle(context.Background(), agentSession, &Input{EvidenceText: "对比一下"})
+	result, err := NewHandler().Handle(context.Background(), agentSession, &Input{EvidenceText: "对比一下"})
 	if err != nil {
 		t.Fatal(err)
 	}

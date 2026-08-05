@@ -23,7 +23,7 @@ func ParseOperation(evidenceText string) SearchOperation {
 	return SearchOperation(turnnormalizer.NormalizeSearch(evidenceText).Operation)
 }
 
-type SearchCarInput struct {
+type Input struct {
 	Operation            SearchOperation
 	EvidenceText         string
 	NoPreferenceExplicit bool
@@ -59,7 +59,7 @@ type RequirementResult struct {
 	Status                          string
 }
 
-type SearchCarResult struct {
+type Result struct {
 	Status        SearchResultStatus
 	InteractionID string
 	ContextID     string
@@ -81,6 +81,6 @@ type SearchCarResult struct {
 	CapabilityResolutions       []capability.Resolution
 }
 
-func NeedsRequirementResult(message string) *SearchCarResult {
-	return &SearchCarResult{Status: ResultNeedsRequirement, Message: message}
+func NeedsRequirementResult(message string) *Result {
+	return &Result{Status: ResultNeedsRequirement, Message: message}
 }

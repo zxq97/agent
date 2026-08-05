@@ -18,7 +18,12 @@ const (
 	maxQuoteScanPages  = 3
 )
 
-type SearchCarHandler struct {
+// Handler executes a vehicle search from the current session state.
+type Handler interface {
+	Handle(context.Context, *session.AgentSession, *Input) (*Result, error)
+}
+
+type handler struct {
 	baseline  baselineProvider
 	executor  searchExecutor
 	processor resultProcessor
@@ -26,29 +31,32 @@ type SearchCarHandler struct {
 	now       func() time.Time
 }
 
-func NewSearchCarHandler(client guide.Client, compiler *searchplan.Compiler, now func() time.Time, resolvers ...capability.Resolver) (*SearchCarHandler, error) {
+func NewHandler(client guide.Client, compiler *searchplan.Compiler, now func() time.Time, resolver capability.Resolver) (Handler, error) {
 	if client == nil {
 		return nil, errors.New("search car: guide client is required")
 	}
 	if compiler == nil {
-		compiler = searchplan.NewCompiler()
+		return nil, errors.New("search car: filter compiler is required")
 	}
 	if now == nil {
-		now = time.Now
+		return nil, errors.New("search car: clock is required")
 	}
-	var resolver capability.Resolver
-	if len(resolvers) > 0 {
-		resolver = resolvers[0]
+	if resolver == nil {
+		return nil, errors.New("search car: capability resolver is required")
+	}
+	executionCompiler, err := searchplan.NewExecutionCompiler(compiler, resolver)
+	if err != nil {
+		return nil, err
 	}
 	executor := &guideSearchExecutor{client: client}
-	return &SearchCarHandler{
+	return &handler{
 		baseline: newGuideBaselineProvider(executor), executor: executor,
 		processor: quoteResultProcessor{},
-		compiler:  searchplan.NewExecutionCompiler(compiler, resolver), now: now,
+		compiler:  executionCompiler, now: now,
 	}, nil
 }
 
-func (h *SearchCarHandler) Handle(ctx context.Context, agentSession *session.AgentSession, input *SearchCarInput) (result *SearchCarResult, err error) {
+func (h *handler) Handle(ctx context.Context, agentSession *session.AgentSession, input *Input) (result *Result, err error) {
 	if agentSession == nil {
 		return nil, errors.New("search car: session is required")
 	}
@@ -66,14 +74,14 @@ func (h *SearchCarHandler) Handle(ctx context.Context, agentSession *session.Age
 		now = h.now()
 	}
 	if working.Pending.Blocks(session.ActionExecuteVehicleSearch) {
-		return &SearchCarResult{Status: ResultWaitingUser, InteractionID: working.Pending.Active.ID, Message: working.Pending.Active.Question}, nil
+		return &Result{Status: ResultWaitingUser, InteractionID: working.Pending.Active.ID, Message: working.Pending.Active.Question}, nil
 	}
 	missing, err := validateRentalContext(working.Search, now)
 	if err != nil {
 		return nil, err
 	}
 	if len(missing) > 0 {
-		return &SearchCarResult{Status: ResultNeedsContext, MissingFields: missing}, nil
+		return &Result{Status: ResultNeedsContext, MissingFields: missing}, nil
 	}
 
 	size := input.PageSize
@@ -94,13 +102,13 @@ func (h *SearchCarHandler) Handle(ctx context.Context, agentSession *session.Age
 				return cached, nil
 			}
 		}
-		operation = OperationSearchNow
+		return &Result{Status: ResultRejected, Message: "当前没有可返回的上一批结果；如果搜索状态已经过期，请明确刷新后重新搜索。"}, nil
 	}
 
 	if operation == OperationNextBatch {
 		executionPlan, valid := h.validContinuationPlan(ctx, working, now)
 		if valid && working.Search.ActiveSearch.Status == session.SearchSnapshotExhausted {
-			return &SearchCarResult{Status: ResultNoResults, Message: "当前搜索条件下没有更多车辆了。"}, nil
+			return &Result{Status: ResultNoResults, Message: "当前搜索条件下没有更多车辆了。"}, nil
 		}
 		if valid {
 			if cached := nextCachedBatch(working, executionPlan.FilterPlan); cached != nil {
@@ -111,6 +119,7 @@ func (h *SearchCarHandler) Handle(ctx context.Context, agentSession *session.Age
 			progress.Emit(ctx, "vehicle_search", "正在继续搜索更多可用车辆")
 			return h.continueSearch(ctx, working, executionPlan.FilterPlan, size, now)
 		}
+		return &Result{Status: ResultRejected, Message: "当前搜索快照已过期或条件已经变化，不能继续原分页；请明确刷新或重新搜索。"}, nil
 	}
 
 	progress.Emit(ctx, "vehicle_search", "正在按当前条件搜索可用车辆")

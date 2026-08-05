@@ -10,18 +10,23 @@ import (
 	"github.com/zxq97/agent/internal/progress"
 )
 
-type Handler struct {
+// Handler answers rental-rule questions from the controlled catalog.
+type Handler interface {
+	Handle(context.Context, *Input) (*Result, error)
+}
+
+type handler struct {
 	catalog Catalog
 }
 
-func New(catalog Catalog) *Handler {
+func NewHandler(catalog Catalog) (Handler, error) {
 	if catalog == nil {
-		catalog = NewDefaultCatalog()
+		return nil, errors.New("rental rules: catalog is required")
 	}
-	return &Handler{catalog: catalog}
+	return &handler{catalog: catalog}, nil
 }
 
-func (h *Handler) Handle(ctx context.Context, input *Input) (*Result, error) {
+func (h *handler) Handle(ctx context.Context, input *Input) (*Result, error) {
 	if input == nil || strings.TrimSpace(input.EvidenceText) == "" {
 		return nil, errors.New("rental rules: evidence text is required")
 	}

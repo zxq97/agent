@@ -50,9 +50,18 @@ type LLMHarnessPolicyConfig struct {
 
 // GuideConfig configures rental-guide quote and menu requests.
 type GuideConfig struct {
-	Endpoint string `yaml:"endpoint"`
-	Phone    string `yaml:"phone"`
-	Timeout  int    `yaml:"timeout"`
+	Endpoint     string                 `yaml:"endpoint"`
+	Phone        string                 `yaml:"phone"`
+	Timeout      int                    `yaml:"timeout"`
+	VehicleEnums GuideVehicleEnumConfig `yaml:"vehicle_enums"`
+}
+
+// GuideVehicleEnumConfig records provider-owned integer enum semantics. It is
+// optional; when absent, enum-based local filtering remains safely unresolved.
+type GuideVehicleEnumConfig struct {
+	Version           string           `yaml:"version"`
+	FuelTypes         map[string][]int `yaml:"fuel_types"`
+	TransmissionTypes map[string][]int `yaml:"transmission_types"`
 }
 
 // MapsConfig configures the map search and POI-resolution API.

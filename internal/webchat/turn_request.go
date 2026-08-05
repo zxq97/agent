@@ -52,14 +52,14 @@ func buildTurnRequest(sourceText string, history []Message, routes *router.Route
 	}
 	request.Plan = planner.New().Build(candidates)
 	if action := request.Plan.Action(planner.ActionModifyRentalContext); action != nil {
-		request.RentalContext = &rentalcontext.ModifyRentalContextInput{SourceText: action.EvidenceText}
+		request.RentalContext = &rentalcontext.Input{SourceText: action.EvidenceText}
 	}
 	if action := request.Plan.Action(planner.ActionUpdateVehicleRequirements); action != nil {
-		request.VehicleRequirement = &vehiclerequirement.UpdateInput{SourceText: action.EvidenceText}
+		request.VehicleRequirement = &vehiclerequirement.Input{SourceText: action.EvidenceText}
 	}
 	if action := request.Plan.Action(planner.ActionExecuteVehicleSearch); action != nil {
 		signals := turnnormalizer.NormalizeSearch(action.EvidenceText)
-		request.SearchRequest = &searchcar.SearchCarInput{
+		request.SearchRequest = &searchcar.Input{
 			Operation:            searchcar.SearchOperation(signals.Operation),
 			EvidenceText:         action.EvidenceText,
 			NoPreferenceExplicit: signals.NoPreference,

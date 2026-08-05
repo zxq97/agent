@@ -127,24 +127,15 @@ func NewDefaultCatalog() *Catalog {
 }
 
 func (c *Catalog) Version() string {
-	if c == nil {
-		return ""
-	}
 	return c.version
 }
 
 func (c *Catalog) Get(id string) (Definition, bool) {
-	if c == nil {
-		return Definition{}, false
-	}
 	value, ok := c.byID[id]
 	return value, ok
 }
 
 func (c *Catalog) Candidates(value Requirement, limit int) []Definition {
-	if c == nil {
-		return nil
-	}
 	if limit <= 0 {
 		limit = 10
 	}

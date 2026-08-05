@@ -3,6 +3,8 @@ package capability
 import (
 	"context"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 type DefaultResolver struct {
@@ -10,17 +12,17 @@ type DefaultResolver struct {
 	matcher Matcher
 }
 
-func NewResolver(catalog *Catalog, matcher Matcher) *DefaultResolver {
+func NewResolver(catalog *Catalog, matcher Matcher) (*DefaultResolver, error) {
 	if catalog == nil {
-		catalog = NewDefaultCatalog()
+		return nil, errors.New("capability resolver: catalog is required")
 	}
-	return &DefaultResolver{catalog: catalog, matcher: matcher}
+	if matcher == nil {
+		return nil, errors.New("capability resolver: matcher is required")
+	}
+	return &DefaultResolver{catalog: catalog, matcher: matcher}, nil
 }
 
 func (r *DefaultResolver) CatalogVersion() string {
-	if r == nil || r.catalog == nil {
-		return ""
-	}
 	return r.catalog.Version()
 }
 
@@ -97,7 +99,7 @@ func (r *DefaultResolver) selectCandidate(ctx context.Context, value Requirement
 	if len(exact) == 1 {
 		return exact[0], MatchAlias, "exact", 1, true
 	}
-	if len(candidates) < 2 || r.matcher == nil {
+	if len(candidates) < 2 {
 		return Definition{}, "", "", 0, false
 	}
 	request := &MatchRequest{Requirement: value, Candidates: make([]MatchCandidate, 0, len(candidates))}

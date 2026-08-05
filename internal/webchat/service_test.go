@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/zxq97/agent/internal/domain"
 	"github.com/zxq97/agent/internal/domain/generalreply"
 	"github.com/zxq97/agent/internal/domain/rentalcontext"
+	"github.com/zxq97/agent/internal/domain/rentalrules"
 	"github.com/zxq97/agent/internal/domain/searchcar"
+	"github.com/zxq97/agent/internal/domain/vehiclecompare"
 	"github.com/zxq97/agent/internal/domain/vehiclerequirement"
 	"github.com/zxq97/agent/internal/orchestrator"
 	"github.com/zxq97/agent/internal/router"
@@ -49,8 +52,20 @@ func (s *controlledSaveStore) Save(ctx context.Context, value *SessionEnvelope, 
 
 type mismatchRentalHandler struct{}
 
-func (mismatchRentalHandler) Handle(context.Context, *session.AgentSession, *rentalcontext.ModifyRentalContextInput) (*rentalcontext.ModifyRentalContextResult, error) {
-	return nil, rentalcontext.ErrDomainMismatch
+func (mismatchRentalHandler) Handle(context.Context, *session.AgentSession, *rentalcontext.Input) (*rentalcontext.Result, error) {
+	return nil, domain.ErrDomainMismatch
+}
+
+type mismatchRequirementHandler struct{}
+
+func (mismatchRequirementHandler) Handle(context.Context, *session.AgentSession, *vehiclerequirement.Input) (*vehiclerequirement.Result, error) {
+	return nil, domain.ErrDomainMismatch
+}
+
+type noOpSearchHandler struct{}
+
+func (noOpSearchHandler) Handle(context.Context, *session.AgentSession, *searchcar.Input) (*searchcar.Result, error) {
+	return &searchcar.Result{Status: searchcar.ResultNeedsContext}, nil
 }
 
 type staticGeneralReplyHandler struct{}
@@ -65,11 +80,56 @@ func (failingGeneralReplyHandler) Handle(context.Context, *session.AgentSession,
 	return nil, errors.New("general reply unavailable")
 }
 
+func newTestRentalRulesHandler() rentalrules.Handler {
+	handler, err := rentalrules.NewHandler(rentalrules.NewDefaultCatalog())
+	if err != nil {
+		panic(err)
+	}
+	return handler
+}
+
+func newTestOrchestrator(
+	rental rentalcontext.Handler,
+	requirement vehiclerequirement.Handler,
+	search searchcar.Handler,
+	policy orchestrator.SearchPolicy,
+	now func() time.Time,
+	general ...generalreply.Handler,
+) *orchestrator.Orchestrator {
+	if rental == nil {
+		rental = mismatchRentalHandler{}
+	}
+	if requirement == nil {
+		requirement = mismatchRequirementHandler{}
+	}
+	if search == nil {
+		search = noOpSearchHandler{}
+	}
+	var generalHandler generalreply.Handler = staticGeneralReplyHandler{}
+	if len(general) > 0 && general[0] != nil {
+		generalHandler = general[0]
+	}
+	value, err := orchestrator.NewWithExtensions(
+		rental,
+		requirement,
+		search,
+		policy,
+		now,
+		generalHandler,
+		vehiclecompare.NewHandler(),
+		newTestRentalRulesHandler(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
 func TestServiceChatIsIdempotentAndRestoresClientSequence(t *testing.T) {
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })
 	intentRouter := staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{Action: router.ActionGeneralReply, EvidenceText: "你好", Confidence: 1}}}}
-	service, err := NewService(orchestrator.New(mismatchRentalHandler{}, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }), intentRouter, store, func() time.Time { return now })
+	service, err := NewService(newTestOrchestrator(mismatchRentalHandler{}, nil, nil, searchpolicy.New(1, func() time.Time { return now }), func() time.Time { return now }), intentRouter, store, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +170,7 @@ func TestServiceRequiresRequestIdentityAndSequence(t *testing.T) {
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })
 	service, err := NewService(
-		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now),
+		newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now),
 		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
 			Action: router.ActionGeneralReply, EvidenceText: "你好", Confidence: 1,
 		}}}},
@@ -136,7 +196,7 @@ func TestServiceExecutesGeneralReplyAction(t *testing.T) {
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })
 	service, err := NewService(
-		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
+		newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
 		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
 			Action: router.ActionGeneralReply, EvidenceText: "SUV和MPV有什么区别", Confidence: 1,
 		}}}},
@@ -163,23 +223,23 @@ type recordingRentalHandler struct {
 	calls *[]string
 }
 
-func (h recordingRentalHandler) Handle(context.Context, *session.AgentSession, *rentalcontext.ModifyRentalContextInput) (*rentalcontext.ModifyRentalContextResult, error) {
+func (h recordingRentalHandler) Handle(context.Context, *session.AgentSession, *rentalcontext.Input) (*rentalcontext.Result, error) {
 	*h.calls = append(*h.calls, "rental")
-	return &rentalcontext.ModifyRentalContextResult{Status: rentalcontext.ResultSuccess}, nil
+	return &rentalcontext.Result{Status: rentalcontext.ResultSuccess}, nil
 }
 
 type recordingSearchHandler struct {
 	calls *[]string
 }
 
-func (h recordingSearchHandler) Handle(context.Context, *session.AgentSession, *searchcar.SearchCarInput) (*searchcar.SearchCarResult, error) {
+func (h recordingSearchHandler) Handle(context.Context, *session.AgentSession, *searchcar.Input) (*searchcar.Result, error) {
 	*h.calls = append(*h.calls, "search")
-	return &searchcar.SearchCarResult{Status: searchcar.ResultNeedsContext}, nil
+	return &searchcar.Result{Status: searchcar.ResultNeedsContext}, nil
 }
 
 type failingSearchHandler struct{}
 
-func (failingSearchHandler) Handle(context.Context, *session.AgentSession, *searchcar.SearchCarInput) (*searchcar.SearchCarResult, error) {
+func (failingSearchHandler) Handle(context.Context, *session.AgentSession, *searchcar.Input) (*searchcar.Result, error) {
 	return nil, errors.New("search failed")
 }
 
@@ -187,10 +247,10 @@ type recordingRequirementHandler struct {
 	calls *[]string
 }
 
-func (h recordingRequirementHandler) Handle(_ context.Context, agentSession *session.AgentSession, _ *vehiclerequirement.UpdateInput) (*vehiclerequirement.UpdateResult, error) {
+func (h recordingRequirementHandler) Handle(_ context.Context, agentSession *session.AgentSession, _ *vehiclerequirement.Input) (*vehiclerequirement.Result, error) {
 	*h.calls = append(*h.calls, "requirement")
 	requirements := []session.SearchRequirementStateItem{{ID: "seat", Facet: "seat_num", CanonicalValue: "7", Operator: "eq", Importance: "hard", Status: "active"}}
-	return &vehiclerequirement.UpdateResult{
+	return &vehiclerequirement.Result{
 		Changed: true, Requirements: requirements,
 		Deltas: []session.StateDelta{&session.RequirementDelta{
 			Requirements: requirements, IncrementVersion: true, ActivateGoal: true,
@@ -227,7 +287,7 @@ func TestServiceRoutesOnlySelectedDomainsInSerialOrder(t *testing.T) {
 			var calls []string
 			store := NewMemoryStore(func() time.Time { return now })
 			service, err := NewService(
-				orchestrator.New(
+				newTestOrchestrator(
 					recordingRentalHandler{calls: &calls},
 					recordingRequirementHandler{calls: &calls},
 					recordingSearchHandler{calls: &calls},
@@ -265,7 +325,7 @@ func TestServiceCommitsConfirmedRequirementWhenSearchFails(t *testing.T) {
 	store := NewMemoryStore(func() time.Time { return now })
 	var calls []string
 	service, err := NewService(
-		orchestrator.New(
+		newTestOrchestrator(
 			nil,
 			recordingRequirementHandler{calls: &calls},
 			failingSearchHandler{},
@@ -352,7 +412,7 @@ func TestServiceDoesNotExposeDraftWhenStoreSaveFails(t *testing.T) {
 	base := NewMemoryStore(func() time.Time { return now })
 	store := &controlledSaveStore{Store: base, failures: 1, err: errors.New("store unavailable")}
 	service, err := NewService(
-		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
+		newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
 		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
 			Action: router.ActionGeneralReply, EvidenceText: "你好", Confidence: 1,
 		}}}},
@@ -383,7 +443,7 @@ func TestServiceReplansOnceAfterVersionConflict(t *testing.T) {
 	base := NewMemoryStore(func() time.Time { return now })
 	store := &controlledSaveStore{Store: base, failures: 1, err: ErrVersionConflict}
 	service, err := NewService(
-		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
+		newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, staticGeneralReplyHandler{}),
 		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
 			Action: router.ActionGeneralReply, EvidenceText: "你好", Confidence: 1,
 		}}}},
@@ -416,7 +476,7 @@ func TestServiceRouterFailureDoesNotCommitTurn(t *testing.T) {
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })
 	service, err := NewService(
-		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now),
+		newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now),
 		failingIntentRouter{}, store, func() time.Time { return now },
 	)
 	if err != nil {
@@ -442,7 +502,7 @@ func TestServiceGeneralReplyFailureUsesDeterministicFallback(t *testing.T) {
 	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
 	store := NewMemoryStore(func() time.Time { return now })
 	service, err := NewService(
-		orchestrator.New(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, failingGeneralReplyHandler{}),
+		newTestOrchestrator(nil, nil, nil, searchpolicy.New(1, time.Now), time.Now, failingGeneralReplyHandler{}),
 		staticIntentRouter{result: &router.RouteResult{Candidates: []router.RouteCandidate{{
 			Action: router.ActionGeneralReply, EvidenceText: "解释一下", Confidence: 1,
 		}}}},

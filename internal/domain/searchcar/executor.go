@@ -13,6 +13,12 @@ import (
 	"github.com/zxq97/agent/internal/session"
 )
 
+var (
+	ErrReturnNotAfterPickup = errors.New("search car: return time must be after pickup time")
+	ErrPickupNotFuture      = errors.New("search car: pickup time must be in the future")
+	ErrInvalidCityID        = errors.New("search car: location city ID must be a positive integer")
+)
+
 type searchExecutor interface {
 	Execute(context.Context, *guide.SearchRequest) (*guide.SearchResponse, error)
 }
@@ -25,14 +31,13 @@ func (e *guideSearchExecutor) Execute(ctx context.Context, request *guide.Search
 	return e.client.SearchQuotes(ctx, request)
 }
 
-func (h *SearchCarHandler) freshSearch(ctx context.Context, agentSession *session.AgentSession, pageSize int, now time.Time) (*SearchCarResult, error) {
+func (h *handler) freshSearch(ctx context.Context, agentSession *session.AgentSession, pageSize int, now time.Time) (*Result, error) {
 	baseline, err := h.ensureBaseline(ctx, agentSession, pageSize, now)
 	if err != nil {
 		return nil, err
 	}
 	executionPlan := h.compileExecutionPlan(ctx, agentSession, baseline)
 	plan := executionPlan.FilterPlan
-	effectivePlan := plan
 	applyResolutions(agentSession, plan.Resolutions)
 
 	response := &guide.SearchResponse{ContextID: baseline.ContextID, VehRates: searchruntime.QuotesToGuide(baseline.BaseQuotes)}
@@ -49,38 +54,8 @@ func (h *SearchCarHandler) freshSearch(ctx context.Context, agentSession *sessio
 	if err != nil {
 		return result, err
 	}
-	if result != nil && (result.Status == ResultNoResults || result.Status == ResultCapabilityLimit) {
-		if alternative, ok := searchplan.FirstRelaxedAlternative(plan); ok {
-			effectivePlan = alternative
-			alternativeResponse := &guide.SearchResponse{
-				ContextID: baseline.ContextID,
-				VehRates:  searchruntime.QuotesToGuide(baseline.BaseQuotes),
-			}
-			if len(alternative.FilterCodes()) > 0 || alternative.ServerSort != "" {
-				alternativeResponse, err = h.executor.Execute(ctx, buildRequest(
-					agentSession.Search,
-					alternative.FilterCodes(),
-					alternative.ServerSort,
-					baseline.ContextID,
-					1,
-					pageSize,
-				))
-				if err != nil {
-					return nil, err
-				}
-				if alternativeResponse == nil {
-					return nil, errors.New("search car: relaxed response is empty")
-				}
-			}
-			applyResolutions(agentSession, alternative.Resolutions)
-			result, err = h.finishSearch(ctx, agentSession, alternative, alternativeResponse, 1, pageSize, now, true)
-			if err != nil {
-				return result, err
-			}
-		}
-	}
 	if result != nil {
-		result.CapabilityResolutions = capabilityResolutionsForPlan(effectivePlan, executionPlan.Resolutions)
+		result.CapabilityResolutions = capabilityResolutionsForPlan(plan, executionPlan.Resolutions)
 	}
 	return result, nil
 }
@@ -105,7 +80,7 @@ func capabilityResolutionsForPlan(plan searchplan.FilterPlan, values []capabilit
 	return result
 }
 
-func (h *SearchCarHandler) continueSearch(ctx context.Context, agentSession *session.AgentSession, plan searchplan.FilterPlan, pageSize int, now time.Time) (*SearchCarResult, error) {
+func (h *handler) continueSearch(ctx context.Context, agentSession *session.AgentSession, plan searchplan.FilterPlan, pageSize int, now time.Time) (*Result, error) {
 	snapshot := agentSession.Search.ActiveSearch
 	page := snapshot.NextPage
 	response, err := h.executor.Execute(ctx, buildRequest(
@@ -127,7 +102,7 @@ func (h *SearchCarHandler) continueSearch(ctx context.Context, agentSession *ses
 
 var _ searchExecutor = (*guideSearchExecutor)(nil)
 
-func (h *SearchCarHandler) compileExecutionPlan(ctx context.Context, agentSession *session.AgentSession, baseline *session.GuideBaselineCache) searchplan.SearchExecutionPlan {
+func (h *handler) compileExecutionPlan(ctx context.Context, agentSession *session.AgentSession, baseline *session.GuideBaselineCache) searchplan.SearchExecutionPlan {
 	return h.compiler.Compile(
 		ctx,
 		planRequirements(agentSession.Search.Requirements),
@@ -152,10 +127,14 @@ func validateRentalContext(state session.SearchState, now time.Time) ([]SearchMi
 		return missing, nil
 	}
 	if !state.ReturnTime.After(*state.PickupTime) {
-		return nil, errors.New("search car: return time must be after pickup time")
+		return nil, ErrReturnNotAfterPickup
 	}
 	if !state.PickupTime.After(now) {
-		return nil, errors.New("search car: pickup time must be in the future")
+		return nil, ErrPickupNotFuture
+	}
+	cityID, err := strconv.Atoi(state.Location.CityID)
+	if err != nil || cityID <= 0 {
+		return nil, ErrInvalidCityID
 	}
 	return nil, nil
 }
@@ -184,13 +163,14 @@ func rentalInfo(location *session.LocationRef, value time.Time, city int) *guide
 func planRequirements(values []session.SearchRequirementStateItem) []searchplan.Requirement {
 	result := make([]searchplan.Requirement, 0, len(values))
 	for _, value := range values {
-		result = append(result, searchplan.Requirement{
+		planned := searchplan.Requirement{
 			ID:               value.ID,
 			Facet:            value.Facet,
 			RawText:          value.RawText,
 			RawValue:         value.RawValue,
 			CanonicalValue:   value.CanonicalValue,
 			Operator:         value.Operator,
+			Relation:         value.Relation,
 			Importance:       value.Importance,
 			Status:           value.Status,
 			EntityID:         value.EntityID,
@@ -201,7 +181,16 @@ func planRequirements(values []session.SearchRequirementStateItem) []searchplan.
 			SemanticLabel:    value.SemanticLabel,
 			Category:         value.Category,
 			Value:            value.Value,
-		})
+		}
+		for _, alternative := range value.Alternatives {
+			planned.Alternatives = append(planned.Alternatives, searchplan.RequirementAlternative{
+				Facet: alternative.Facet, RawValue: alternative.RawValue,
+				CanonicalValue: alternative.CanonicalValue, EntityID: alternative.EntityID,
+				EntityType: alternative.EntityType, EntityBrandID: alternative.EntityBrandID,
+				EntityParentID: alternative.EntityParentID, EntityResolution: alternative.EntityResolution,
+			})
+		}
+		result = append(result, planned)
 	}
 	return result
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/zxq97/agent/api/agenthub"
 )
 
@@ -92,30 +93,30 @@ type RecallResolver struct {
 	selector CandidateSelector
 }
 
-func NewRecallResolver(local *StaticCatalog, recall agenthub.Client, selector CandidateSelector) *RecallResolver {
+func NewRecallResolver(local *StaticCatalog, recall agenthub.Client, selector CandidateSelector) (*RecallResolver, error) {
 	if local == nil {
-		local = NewDefaultCatalog()
+		return nil, errors.New("vehicle catalog recall resolver: local catalog is required")
 	}
-	return &RecallResolver{local: local, recall: recall, selector: selector}
+	if recall == nil {
+		return nil, errors.New("vehicle catalog recall resolver: agenthub client is required")
+	}
+	if selector == nil {
+		return nil, errors.New("vehicle catalog recall resolver: candidate selector is required")
+	}
+	return &RecallResolver{local: local, recall: recall, selector: selector}, nil
 }
 
 func (r *RecallResolver) Version() string {
-	if r == nil || r.local == nil {
-		return ""
-	}
 	return r.local.Version()
 }
 
 func (r *RecallResolver) Resolve(input *ResolveInput) Resolution {
-	if r == nil || r.local == nil {
-		return Resolution{Status: ResolveNotFound}
-	}
 	return r.local.Resolve(input)
 }
 
 func (r *RecallResolver) ResolveContext(ctx context.Context, input *ResolveInput) Resolution {
 	local := r.Resolve(input)
-	if local.Status != ResolveNotFound || r == nil || r.recall == nil || input == nil ||
+	if local.Status != ResolveNotFound || input == nil ||
 		strings.TrimSpace(input.Name) == "" {
 		return local
 	}
@@ -159,9 +160,6 @@ func (r *RecallResolver) ResolveContext(ctx context.Context, input *ResolveInput
 			value.Source = "agenthub_revalidated"
 			return value
 		}
-	}
-	if r.selector == nil {
-		return Resolution{Status: ResolveAmbiguous, Source: "agenthub", Reason: "agenthub_candidates_ambiguous"}
 	}
 	candidateID, err := r.selector.SelectCandidate(ctx, input, response.Candidates)
 	if err != nil {
@@ -244,15 +242,12 @@ func (c *StaticCatalog) ProviderNames(entityID, provider string) []string {
 }
 
 func (c *StaticCatalog) Version() string {
-	if c == nil {
-		return ""
-	}
 	return c.version
 }
 
 // EntityByID returns a catalog entity by its stable identifier.
 func (c *StaticCatalog) EntityByID(id string) (Entity, bool) {
-	if c == nil || strings.TrimSpace(id) == "" {
+	if strings.TrimSpace(id) == "" {
 		return Entity{}, false
 	}
 	for _, entity := range c.entities {
@@ -265,7 +260,7 @@ func (c *StaticCatalog) EntityByID(id string) (Entity, bool) {
 
 // ModelsBySeries returns the known models belonging to a series.
 func (c *StaticCatalog) ModelsBySeries(seriesID string) []Entity {
-	if c == nil || strings.TrimSpace(seriesID) == "" {
+	if strings.TrimSpace(seriesID) == "" {
 		return nil
 	}
 	var result []Entity
@@ -278,7 +273,7 @@ func (c *StaticCatalog) ModelsBySeries(seriesID string) []Entity {
 }
 
 func (c *StaticCatalog) Resolve(input *ResolveInput) Resolution {
-	if c == nil || input == nil {
+	if input == nil {
 		return Resolution{Status: ResolveNotFound}
 	}
 	name := normalize(input.Name)

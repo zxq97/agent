@@ -18,7 +18,7 @@ func (e staticExtractor) Extract(context.Context, *ExtractionInput) (*ExtractRes
 }
 
 func TestNormalizeVehicleModelUsesCatalogAndBrandHint(t *testing.T) {
-	handler := &Handler{entities: vehiclecatalog.NewDefaultCatalog()}
+	handler := &handler{entities: vehiclecatalog.NewDefaultCatalog()}
 	item := handler.normalize(Requirement{
 		Facet:      FacetVehicleModel,
 		RawText:    "特斯拉 ModelY",
@@ -56,7 +56,7 @@ func TestReplacingWithSameSemanticRequirementDoesNotChangeVersionInput(t *testin
 }
 
 func TestRemoveEntityAliasMatchesCanonicalValue(t *testing.T) {
-	handler := &Handler{entities: vehiclecatalog.NewDefaultCatalog()}
+	handler := &handler{entities: vehiclecatalog.NewDefaultCatalog()}
 	operation := Requirement{Facet: FacetBrand, RawText: "不要Tesla限制了", RawValue: "Tesla", Operation: OperationRemove, Operator: OperatorEQ, Importance: ImportanceHard}
 	normalized := handler.normalize(operation)
 	current := []session.SearchRequirementStateItem{{ID: "brand", Facet: "brand", CanonicalValue: "特斯拉", Operator: "eq", Importance: "hard", Status: "active"}}
@@ -115,7 +115,7 @@ func TestHandlerReturnsDeltaWithoutMutatingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentSession := &session.AgentSession{}
-	result, err := handler.Handle(context.Background(), agentSession, &UpdateInput{SourceText: "想要7座"})
+	result, err := handler.Handle(context.Background(), agentSession, &Input{SourceText: "想要7座"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestHandlerPreservesOpenSemanticRequirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentSession := &session.AgentSession{}
-	result, err := handler.Handle(context.Background(), agentSession, &UpdateInput{SourceText: "适合带老人出行"})
+	result, err := handler.Handle(context.Background(), agentSession, &Input{SourceText: "适合带老人出行"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestHandlerPreservesOpenSemanticRequirement(t *testing.T) {
 
 func TestNormalizeTypedTotalBudgetPreservesCompilerContract(t *testing.T) {
 	amount := 300.0
-	handler := &Handler{entities: vehiclecatalog.NewDefaultCatalog()}
+	handler := &handler{entities: vehiclecatalog.NewDefaultCatalog()}
 	item := handler.normalize(Requirement{
 		RawText: "300元以内", Category: requirement.CategoryPrice,
 		CanonicalType: FacetPricePreference,
@@ -183,8 +183,26 @@ func TestNormalizeTypedTotalBudgetPreservesCompilerContract(t *testing.T) {
 	}
 }
 
+func TestNormalizeVehicleAnyOfKeepsOneRequirement(t *testing.T) {
+	handler := &handler{entities: vehiclecatalog.NewDefaultCatalog()}
+	item := handler.normalize(Requirement{
+		RawText: "宝马或Model Y", SemanticLabel: "vehicle_entity_any_of",
+		Category: requirement.CategoryVehicle, Operation: OperationReplace,
+		Relation: RelationAnyOf, Operator: OperatorIN, Importance: ImportanceHard,
+		Alternatives: []ConstraintAlternative{
+			{CanonicalType: FacetBrand, Value: requirement.Value{Kind: requirement.ValueText, Text: "宝马"}},
+			{CanonicalType: FacetVehicleModel, Value: requirement.Value{Kind: requirement.ValueText, Text: "Model Y"}, EntityContext: EntityContext{BrandHint: "特斯拉"}},
+		},
+	})
+	if item.Facet != "vehicle_entity_any_of" || len(item.Alternatives) != 2 ||
+		item.Alternatives[0].EntityID != "brand:bmw" ||
+		item.Alternatives[1].EntityID != "model:tesla:model-y" {
+		t.Fatalf("unexpected normalized OR: %#v", item)
+	}
+}
+
 func TestMergeKeepsDistinctOpenRequirements(t *testing.T) {
-	handler := &Handler{entities: vehiclecatalog.NewDefaultCatalog()}
+	handler := &handler{entities: vehiclecatalog.NewDefaultCatalog()}
 	operations := []Requirement{
 		{
 			RawText: "适合老人出行", SemanticLabel: "elderly_friendly",
@@ -230,5 +248,19 @@ func TestOpenRequirementDoesNotMatchBySemanticLabelAlone(t *testing.T) {
 	}
 	if openRequirementMatches(left, right) {
 		t.Fatal("different open requirements matched only because their labels were equal")
+	}
+}
+
+func TestOpenRequirementMatchesStableSemanticLabelAcrossWording(t *testing.T) {
+	left := session.SearchRequirementStateItem{
+		ID: "left", RawText: "适合老人出行", SemanticLabel: "elderly_friendly",
+		Category: requirement.CategoryUsageScenario,
+	}
+	right := session.SearchRequirementStateItem{
+		ID: "right", RawText: "老人上下车方便", SemanticLabel: "elderly_friendly",
+		Category: requirement.CategoryUsageScenario,
+	}
+	if !openRequirementMatches(left, right) {
+		t.Fatal("stable semantic label did not match synonymous open requirements")
 	}
 }

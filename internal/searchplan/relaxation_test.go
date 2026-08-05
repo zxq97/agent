@@ -2,7 +2,7 @@ package searchplan
 
 import "testing"
 
-func TestFirstRelaxedAlternativePrefersBudgetAndDisclosesIt(t *testing.T) {
+func TestRelaxRequirementOnlyRelaxesExplicitRequirement(t *testing.T) {
 	plan := FilterPlan{
 		MenuFilters: []MenuFilter{
 			{RequirementID: "brand", Code: "filter/brand/丰田"},
@@ -17,7 +17,7 @@ func TestFirstRelaxedAlternativePrefersBudgetAndDisclosesIt(t *testing.T) {
 			{RequirementID: "budget", RawText: "总价500以内", Importance: "hard", Capability: CapabilityFilterable},
 		},
 	}
-	alternative, ok := FirstRelaxedAlternative(plan)
+	alternative, ok := RelaxRequirement(plan, "budget")
 	if !ok || len(alternative.MenuFilters) != 1 ||
 		alternative.MenuFilters[0].RequirementID != "brand" ||
 		len(alternative.LocalVerifiers) != 1 ||

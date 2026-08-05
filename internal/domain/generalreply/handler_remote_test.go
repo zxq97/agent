@@ -14,7 +14,7 @@ import (
 
 const generalReplyTestConfigPath = "../../../conf/dev.yaml"
 
-func TestLLMHandlerWithRemoteService(t *testing.T) {
+func TestHandlerWithRemoteService(t *testing.T) {
 	if os.Getenv("RUN_REMOTE_INTEGRATION") != "1" {
 		t.Skip("set RUN_REMOTE_INTEGRATION=1 to run real LLM integration tests")
 	}
@@ -31,7 +31,7 @@ func TestLLMHandlerWithRemoteService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewLLMHandler(client)
+	handler, err := NewHandler(client)
 	if err != nil {
 		t.Fatal(err)
 	}

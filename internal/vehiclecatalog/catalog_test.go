@@ -1,6 +1,37 @@
 package vehiclecatalog
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/zxq97/agent/api/agenthub"
+	"github.com/zxq97/agent/api/llm"
+)
+
+func TestRecallResolverRequiresDependencies(t *testing.T) {
+	llmClient, err := llm.NewHTTPClient(&llm.HTTPConfig{
+		Endpoint: "http://unused.invalid",
+		APIKey:   "test-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := NewLLMCandidateSelector(llmClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recall := agenthub.NewHTTPClient(&agenthub.HTTPConfig{Endpoint: "http://unused.invalid"})
+	catalog := NewDefaultCatalog()
+
+	if _, err := NewRecallResolver(nil, recall, selector); err == nil {
+		t.Fatal("expected missing catalog error")
+	}
+	if _, err := NewRecallResolver(catalog, nil, selector); err == nil {
+		t.Fatal("expected missing recall client error")
+	}
+	if _, err := NewRecallResolver(catalog, recall, nil); err == nil {
+		t.Fatal("expected missing selector error")
+	}
+}
 
 func TestDefaultCatalogResolvesAliases(t *testing.T) {
 	catalog := NewDefaultCatalog()

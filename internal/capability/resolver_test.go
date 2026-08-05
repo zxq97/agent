@@ -15,8 +15,26 @@ func (m staticMatcher) Match(context.Context, *MatchRequest) ([]Match, error) {
 	return m.matches, nil
 }
 
+func newTestResolver(t *testing.T, catalog *Catalog, matcher Matcher) *DefaultResolver {
+	t.Helper()
+	resolver, err := NewResolver(catalog, matcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolver
+}
+
+func TestNewResolverRequiresDependencies(t *testing.T) {
+	if _, err := NewResolver(nil, staticMatcher{}); err == nil {
+		t.Fatal("expected missing catalog error")
+	}
+	if _, err := NewResolver(NewDefaultCatalog(), nil); err == nil {
+		t.Fatal("expected missing matcher error")
+	}
+}
+
 func TestResolverExecutesApprovedScenarioRank(t *testing.T) {
-	resolver := NewResolver(NewDefaultCatalog(), nil)
+	resolver := newTestResolver(t, NewDefaultCatalog(), staticMatcher{})
 	result := resolver.Resolve(context.Background(), Requirement{
 		ID: "elderly", RawText: "适合带老人出行", SemanticLabel: "elderly_friendly",
 		Category: requirement.CategoryUsageScenario, Importance: "soft",
@@ -28,7 +46,7 @@ func TestResolverExecutesApprovedScenarioRank(t *testing.T) {
 }
 
 func TestResolverExecutesSoftRankOnlyWithRequiredField(t *testing.T) {
-	resolver := NewResolver(NewDefaultCatalog(), nil)
+	resolver := newTestResolver(t, NewDefaultCatalog(), staticMatcher{})
 	value := Requirement{
 		ID: "budget", RawText: "优先便宜的", SemanticLabel: "budget_friendly",
 		Category: requirement.CategoryPreference, Importance: "soft",
@@ -45,7 +63,7 @@ func TestResolverExecutesSoftRankOnlyWithRequiredField(t *testing.T) {
 }
 
 func TestResolverDowngradesHardNonFilterableRequirementToDisclosedRank(t *testing.T) {
-	resolver := NewResolver(NewDefaultCatalog(), nil)
+	resolver := newTestResolver(t, NewDefaultCatalog(), staticMatcher{})
 	result := resolver.Resolve(context.Background(), Requirement{
 		ID: "budget", RawText: "必须便宜", SemanticLabel: "budget_friendly",
 		Category: requirement.CategoryPreference, Importance: "hard",
@@ -57,7 +75,7 @@ func TestResolverDowngradesHardNonFilterableRequirementToDisclosedRank(t *testin
 }
 
 func TestResolverRejectsMatcherCapabilityOutsideCandidates(t *testing.T) {
-	resolver := NewResolver(NewDefaultCatalog(), staticMatcher{matches: []Match{{
+	resolver := newTestResolver(t, NewDefaultCatalog(), staticMatcher{matches: []Match{{
 		CapabilityID: "luxury_level", Relation: "exact", Confidence: 1,
 	}}})
 	result := resolver.Resolve(context.Background(), Requirement{
@@ -70,7 +88,7 @@ func TestResolverRejectsMatcherCapabilityOutsideCandidates(t *testing.T) {
 }
 
 func TestRelevantMatcherRelationNeverCreatesExecution(t *testing.T) {
-	resolver := NewResolver(NewDefaultCatalog(), staticMatcher{matches: []Match{{
+	resolver := newTestResolver(t, NewDefaultCatalog(), staticMatcher{matches: []Match{{
 		CapabilityID: "large_space", Relation: "relevant", Confidence: 0.9,
 	}}})
 	result := resolver.Resolve(context.Background(), Requirement{
@@ -84,7 +102,7 @@ func TestRelevantMatcherRelationNeverCreatesExecution(t *testing.T) {
 }
 
 func TestResolverRejectsRuntimeCatalogVersionDrift(t *testing.T) {
-	resolver := NewResolver(NewDefaultCatalog(), nil)
+	resolver := newTestResolver(t, NewDefaultCatalog(), staticMatcher{})
 	result := resolver.Resolve(context.Background(), Requirement{
 		ID: "budget", RawText: "优先便宜的", SemanticLabel: "budget_friendly",
 		Category: requirement.CategoryPreference, Importance: "soft",
@@ -109,7 +127,7 @@ func TestResolverRejectsExecutionWithUnapprovedFieldContract(t *testing.T) {
 			Operation:      "price_low",
 		},
 	}})
-	resolver := NewResolver(catalog, nil)
+	resolver := newTestResolver(t, catalog, staticMatcher{})
 	result := resolver.Resolve(context.Background(), Requirement{
 		ID: "budget", RawText: "优先便宜", SemanticLabel: "budget_friendly",
 		Category: requirement.CategoryPreference, Importance: "soft",

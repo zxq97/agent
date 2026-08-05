@@ -31,7 +31,7 @@ func (quoteResultProcessor) Rank(values []guide.VehRate, plan searchplan.FilterP
 	return localrank.Rank(ranked, plan.ExploratoryRanks)
 }
 
-func (h *SearchCarHandler) finishSearch(
+func (h *handler) finishSearch(
 	ctx context.Context,
 	agentSession *session.AgentSession,
 	plan searchplan.FilterPlan,
@@ -39,16 +39,21 @@ func (h *SearchCarHandler) finishSearch(
 	requestPage, pageSize int,
 	now time.Time,
 	fresh bool,
-) (*SearchCarResult, error) {
+) (*Result, error) {
 	agentSession.Search.DirtyReason = ""
 	rawCount := len(response.VehRates)
 	vehicles, verificationReport := h.processor.Filter(response.VehRates, plan)
 	lastResponse := response
 	lastPage := requestPage
+	providerExhausted := len(response.VehRates) == 0
+	needsCandidateCollection := len(plan.QuoteFilters) > 0 ||
+		len(plan.LocalVerifiers) > 0 ||
+		len(plan.RankFactors) > 0 ||
+		len(plan.ExploratoryRanks) > 0
 
-	for len(vehicles) == 0 &&
-		(len(plan.QuoteFilters) > 0 || len(plan.LocalVerifiers) > 0) &&
-		rawCount > 0 &&
+	for len(vehicles) < pageSize &&
+		needsCandidateCollection &&
+		!providerExhausted &&
 		lastPage < requestPage+maxQuoteScanPages-1 {
 		lastPage++
 		next, err := h.executor.Execute(ctx, buildRequest(
@@ -68,9 +73,11 @@ func (h *SearchCarHandler) finishSearch(
 		lastResponse = next
 		rawCount += len(next.VehRates)
 		var nextReport searchplan.VerificationReport
-		vehicles, nextReport = h.processor.Filter(next.VehRates, plan)
+		nextVehicles, nextReport := h.processor.Filter(next.VehRates, plan)
+		vehicles = append(vehicles, nextVehicles...)
 		verificationReport = mergeVerificationReports(verificationReport, nextReport)
 		if len(next.VehRates) == 0 {
+			providerExhausted = true
 			break
 		}
 	}
@@ -115,7 +122,7 @@ func (h *SearchCarHandler) finishSearch(
 		h.saveResults(agentSession, nil)
 		result := resultFromPlan(ResultCapabilityLimit, plan, nil, lastResponse.ContextID, lastPage)
 		result.VerificationReport = verificationReport
-		result.Message = "当前已获取的候选车辆中没有能够验证全部硬条件的结果；系统没有把未验证条件当作已满足。"
+		result.Message = "Guide 返回了候选，但当前已获取车辆中没有能够验证全部硬条件的结果；系统没有把字段未知或明确不匹配的车辆当作满足。你可以保持条件继续扩大搜索，或明确选择要调整的条件。"
 		return result, nil
 	}
 
@@ -133,6 +140,9 @@ func (h *SearchCarHandler) finishSearch(
 	}
 	result := resultFromPlan(status, plan, vehicles, lastResponse.ContextID, lastPage)
 	result.VerificationReport = verificationReport
+	if providerExhausted {
+		snapshot.Status = session.SearchSnapshotExhausted
+	}
 	if (len(plan.RankFactors) > 0 || len(plan.ExploratoryRanks) > 0) && plan.ServerSort == "" {
 		result.RankingScope = "fetched_set"
 	}
@@ -184,7 +194,7 @@ func applyExploratoryRankingReport(plan *searchplan.FilterPlan, report localrank
 
 var _ resultProcessor = quoteResultProcessor{}
 
-func previousBatch(agentSession *session.AgentSession, plan searchplan.FilterPlan) *SearchCarResult {
+func previousBatch(agentSession *session.AgentSession, plan searchplan.FilterPlan) *Result {
 	snapshot := agentSession.Search.ActiveSearch
 	if snapshot == nil || len(snapshot.Batches) < 2 {
 		return nil
@@ -204,7 +214,7 @@ func previousBatch(agentSession *session.AgentSession, plan searchplan.FilterPla
 	return resultFromPlan(cachedBatchStatus(plan), plan, searchruntime.QuotesToGuide(batch.Vehicles), snapshot.ContinuationContextID, batch.RequestPage)
 }
 
-func nextCachedBatch(agentSession *session.AgentSession, plan searchplan.FilterPlan) *SearchCarResult {
+func nextCachedBatch(agentSession *session.AgentSession, plan searchplan.FilterPlan) *Result {
 	snapshot := agentSession.Search.ActiveSearch
 	if snapshot == nil {
 		return nil
@@ -280,8 +290,8 @@ func applyResolutions(agentSession *session.AgentSession, resolutions []searchpl
 	}
 }
 
-func resultFromPlan(status SearchResultStatus, plan searchplan.FilterPlan, vehicles []guide.VehRate, contextID string, page int) *SearchCarResult {
-	return &SearchCarResult{
+func resultFromPlan(status SearchResultStatus, plan searchplan.FilterPlan, vehicles []guide.VehRate, contextID string, page int) *Result {
+	return &Result{
 		Status:                      status,
 		ContextID:                   contextID,
 		Vehicles:                    vehicles,
@@ -368,7 +378,7 @@ func hasPartialResolution(values []searchplan.Resolution) bool {
 	return false
 }
 
-func (h *SearchCarHandler) saveResults(agentSession *session.AgentSession, vehicles []guide.VehRate) {
+func (h *handler) saveResults(agentSession *session.AgentSession, vehicles []guide.VehRate) {
 	agentSession.Search.LastResults = nil
 	for index, value := range vehicles {
 		ref := session.VehicleResultRef{Index: index, SupplierCode: value.SupplierCode}

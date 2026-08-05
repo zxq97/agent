@@ -8,8 +8,40 @@ import (
 	"github.com/zxq97/agent/internal/requirement"
 )
 
+type noMatchCapabilityMatcher struct{}
+
+func (noMatchCapabilityMatcher) Match(context.Context, *capability.MatchRequest) ([]capability.Match, error) {
+	return nil, nil
+}
+
+func newTestExecutionCompiler(t *testing.T) *ExecutionCompiler {
+	t.Helper()
+	resolver, err := capability.NewResolver(capability.NewDefaultCatalog(), noMatchCapabilityMatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := NewExecutionCompiler(NewCompiler(), resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiler
+}
+
+func TestNewExecutionCompilerRequiresDependencies(t *testing.T) {
+	resolver, err := capability.NewResolver(capability.NewDefaultCatalog(), noMatchCapabilityMatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewExecutionCompiler(nil, resolver); err == nil {
+		t.Fatal("expected missing filter compiler error")
+	}
+	if _, err := NewExecutionCompiler(NewCompiler(), nil); err == nil {
+		t.Fatal("expected missing capability resolver error")
+	}
+}
+
 func TestExecutionCompilerMaterializesSoftExploratoryRequirement(t *testing.T) {
-	compiler := NewExecutionCompiler(NewCompiler(), capability.NewResolver(capability.NewDefaultCatalog(), nil))
+	compiler := newTestExecutionCompiler(t)
 	plan := compiler.Compile(context.Background(), []Requirement{{
 		ID: "elderly", RawText: "适合带老人出行", SemanticLabel: "elderly_friendly",
 		Category: requirement.CategoryUsageScenario, Importance: "soft", Operator: "eq",
@@ -26,7 +58,7 @@ func TestExecutionCompilerMaterializesSoftExploratoryRequirement(t *testing.T) {
 }
 
 func TestExecutionCompilerRanksHardOpenRequirementWithoutBlocking(t *testing.T) {
-	compiler := NewExecutionCompiler(NewCompiler(), capability.NewResolver(capability.NewDefaultCatalog(), nil))
+	compiler := newTestExecutionCompiler(t)
 	plan := compiler.Compile(context.Background(), []Requirement{{
 		ID: "elderly", RawText: "必须适合老人", SemanticLabel: "elderly_friendly",
 		Category: requirement.CategoryUsageScenario, Importance: "hard", Operator: "eq",
@@ -39,7 +71,7 @@ func TestExecutionCompilerRanksHardOpenRequirementWithoutBlocking(t *testing.T) 
 }
 
 func TestExecutionCompilerMaterializesResolvedOpenRank(t *testing.T) {
-	compiler := NewExecutionCompiler(NewCompiler(), capability.NewResolver(capability.NewDefaultCatalog(), nil))
+	compiler := newTestExecutionCompiler(t)
 	plan := compiler.Compile(context.Background(), []Requirement{{
 		ID: "budget", RawText: "优先便宜的", SemanticLabel: "budget_friendly",
 		Category: requirement.CategoryPreference, Importance: "soft", Operator: "eq",

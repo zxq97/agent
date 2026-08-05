@@ -5,16 +5,17 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/zxq97/agent/internal/domain"
 )
 
-func mapExtractResult(result *RentalContextExtractResult) (*ModifyRentalContextCommand, []AmbiguousField, error) {
+func mapExtractResult(result *ExtractResult) (*Command, []AmbiguousField, error) {
 	if result == nil {
 		return nil, nil, errors.New("modify rental context: extraction result is required")
 	}
 	if !result.DomainMatched {
-		return nil, nil, ErrDomainMismatch
+		return nil, nil, domain.ErrDomainMismatch
 	}
-	command := &ModifyRentalContextCommand{LocationQuery: strings.TrimSpace(result.LocationQuery)}
+	command := &Command{LocationQuery: strings.TrimSpace(result.LocationQuery)}
 	var ambiguous []AmbiguousField
 	for _, item := range []struct {
 		name   string

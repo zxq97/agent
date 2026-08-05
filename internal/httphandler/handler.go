@@ -21,6 +21,9 @@ func New(service *webchat.Service, logger log.Logger) (*Handler, error) {
 	if service == nil {
 		return nil, errors.New("web handler: service is required")
 	}
+	if logger == nil {
+		return nil, errors.New("web handler: logger is required")
+	}
 	return &Handler{service: service, logger: logger}, nil
 }
 
